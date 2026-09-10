@@ -1,0 +1,14 @@
+Machina — Scott Buckley
+
+'Machina' by Scott Buckley — released under CC-BY 4.0.
+https://www.scottbuckley.com.au
+Track: https://www.scottbuckley.com.au/library/machina/
+License: https://creativecommons.org/licenses/by/4.0/
+Source: https://www.scottbuckley.com.au/library/wp-content/uploads/2019/12/sb_machina.mp3
+
+Used as the soundtrack of GLUSH / ГЛУШЬ.
+The original MP3 was transcoded to 128 kbps for browser delivery.
+The game applies volume changes, filtering and looping during playback.
+No claim of authorship or endorsement is made.
+
+Procedural environmental audio and interface effects: original game code.

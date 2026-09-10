@@ -1,0 +1,52 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ГЛУШЬ · renderer check</title>
+<style>@font-face{font-family:Tiny5;src:url('/fonts/tiny5.ttf')}body{margin:0;background:#17120f;color:#cfbf92;font:16px Tiny5}canvas{width:100vw;height:100vh;display:block;image-rendering:pixelated}nav{position:absolute;top:12px;left:12px;display:flex;gap:10px;flex-wrap:wrap}button{font:inherit;background:#241d16;color:inherit;border:1px solid #89774d;padding:8px}output{position:absolute;bottom:12px;left:12px}</style>
+<canvas id="scene"></canvas><nav><button id="trails">Колея и занос</button><button id="walk">Пешком</button><button id="ruin">Руины</button><button id="island">Остров</button><button id="storm">Буря</button><button id="rescue">Спасение</button><button id="stress">Нагрузка</button></nav><output id="report"></output>
+<script type="module">
+import { World } from '/src/game/world.ts';
+import { Simulation } from '/src/game/simulation.ts';
+import { Renderer } from '/src/game/renderer.ts';
+import { REGIONS, createCampaign } from '/src/game/campaign.ts';
+const renderer = new Renderer(document.querySelector('canvas'));
+const report = document.querySelector('output');
+const idle = {x:0,y:0,boost:false,brake:false,dash:false,interact:false,pulse:false};
+let sim;
+const step = (count, control) => { for(let i=0;i<count;i++){sim.update(1/60,{...idle,...control});sim.events=[];renderer.render(sim,1/60)} };
+const draw = () => { renderer.render(sim,1/60);report.textContent = `${sim.driving?'CAR':'FOOT'} · ${sim.tracks.length} track segments · ${sim.particles.length} particles`; };
+REGIONS.forEach((region, i)=>{
+  const button=document.createElement('button');button.textContent=region.name;document.querySelector('nav').append(button);
+  button.onclick=()=>{const c=createCampaign();c.upgrades.lamps=2;sim=new Simulation(new World('MOSS-0842',i),c);sim.launch();sim.elapsed=i===6?225:0;renderer.reset(sim);step(90,{x:1,y:-.3});draw()};
+});
+const fade=document.createElement('button');fade.textContent='След через 6 секунд';document.querySelector('nav').append(fade);fade.onclick=()=>{sim.updateEffects(6);draw()};
+function trails(){
+  sim = new Simulation(new World('MOSS-0842')); sim.launch(); renderer.reset(sim);
+  step(160,{x:1,y:-.35});step(45,{y:1,brake:true,boost:true});step(35,{x:-1,brake:true,boost:true});draw();
+}
+document.querySelector('#trails').onclick=trails;
+document.querySelector('#walk').onclick=()=>{if(sim.driving)sim.interact();step(22,{y:1});draw()};
+function location(kind){
+  sim=new Simulation(new World('MOSS-0842',kind==='storm'?2:0));sim.launch();
+  const site=sim.world.sites[kind==='island'?2:1];
+  Object.assign(sim.car,{x:site.x,y:site.y+84,angle:-Math.PI/2});
+  Object.assign(sim.player,{x:site.x,y:site.y+42});sim.driving=false;
+  if(kind==='rescue'){
+    const wreck=sim.world.wrecks[0];Object.assign(sim.car,{x:wreck.x+46,y:wreck.y,angle:0});
+    Object.assign(sim.player,{x:sim.car.x,y:sim.car.y});sim.driving=true;wreck.attached=true;wreck.progress=46;
+  }
+  if(kind==='storm'){
+    sim.driving=true;Object.assign(sim.player,{x:sim.car.x,y:sim.car.y});
+    sim.elapsed=14+((sim.player.x*.8+sim.player.y*.2)/2304+.2)/1.5*165;
+    sim.exposure=64;sim.cargo.push({id:3,kind:'volatile',condition:100,ttl:28});
+  }
+  sim.world.reveal(sim.player.x,sim.player.y,12);renderer.reset(sim);
+  for(let i=0;i<15;i++)renderer.render(sim,1/60);draw();
+}
+for(const kind of ['ruin','island','storm','rescue'])document.querySelector('#'+kind).onclick=()=>location(kind);
+document.querySelector('#stress').onclick=()=>{
+  trails(); const existing=[...sim.tracks]; while(sim.tracks.length<6500)sim.tracks.push(...existing);sim.tracks.length=6500;
+  sim.burst(sim.player.x,sim.player.y,'#e4d3c0',420);sim.updateEffects(.001);
+  const start=performance.now();for(let i=0;i<120;i++)renderer.render(sim,1/60);
+  report.textContent=`${((performance.now()-start)/120).toFixed(2)} ms/render · ${sim.tracks.length} tracks · ${sim.particles.length} particles`;
+};
+window.addEventListener('resize',()=>{renderer.resize();draw()});
+await document.fonts.load('12px Tiny5');trails();
+</script></html>

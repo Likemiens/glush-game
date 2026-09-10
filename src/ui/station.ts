@@ -1,0 +1,32 @@
+import { activeContracts, CONTRACTS, MAX_LEVEL, REGIONS, UPGRADES, levelLimit, regionLock, upgradeLock } from '../game/campaign';
+import type { Campaign, UpgradeId } from '../game/campaign';
+import type { Simulation } from '../game/simulation';
+
+export type BaseView = 'dispatch' | 'workshop' | 'journal';
+export const escape = (text: string): string => text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+const money = (n: number): string => n.toLocaleString('ru-RU');
+
+export function journalMarkup(c: Campaign): string {
+  const cards = (done: boolean): string => CONTRACTS.map((q, i) => {
+    if (c.claimed[i] !== done || !done && !q.available(c)) return '';
+    return `<article class="contract ${done ? 'done' : ''}"><div><span>${done ? '✓ ' : ''}${q.name}</span><span>${q.progress(c)}/${q.total}</span></div><p>${q.description}</p><div class="progress-line"><i style="width:${q.progress(c) / q.total * 100}%"></i></div><small>+${money(q.credits)} деталей · +${q.research} схем</small></article>`;
+  }).join('');
+  const completed = c.claimed.filter(Boolean).length;
+  return `<div class="section-heading"><span>Задания</span><small>${completed} / ${CONTRACTS.length}</small></div><div class="contracts">${cards(false) || '<p class="story">Все задания выполнены. Патрули всё ещё приносят детали и схемы.</p>'}</div>${completed ? `<details><summary>Выполнено: ${completed}</summary>${cards(true)}</details>` : ''}<p class="base-note">Новые задания открываются по мере возвращения связи.<br>Доставлено ${c.delivered} · спасено ${c.rescued} · патрулей ${c.stats.patrols}</p>`;
+}
+
+export function stationMarkup(sim: Simulation, view: BaseView, selected: number): string {
+  const c = sim.campaign, relays = c.relics.filter(Boolean).length;
+  const heading = `<header class="station-header"><div class="base-eyebrow"><span>День ${c.day} · Станция «Глушь»</span><button id="base-settings" aria-label="Настройки">☷</button></div><div class="station-title"><h2 id="panel-title">ГЛУШЬ</h2><div class="bank"><span>${money(c.credits)} <small>деталей</small></span><span>${c.research} <small>схем</small></span></div></div><div class="relay-progress" aria-label="Восстановлено ${relays} из 7 ретрансляторов"><span>${REGIONS.map((r, i) => `<i title="${r.name}" class="${c.relics[i] ? 'online' : ''}" style="--region:${r.color}"></i>`).join('')}</span><small>Связь ${relays}/7</small></div><nav class="base-tabs" aria-label="Станция">${(['dispatch', 'workshop', 'journal'] as const).map((v, i) => `<button data-view="${v}" aria-pressed="${view === v}">${['Выезд', 'Мастерская', 'Задания'][i]}</button>`).join('')}</nav></header>`;
+  if (view === 'journal') return heading + journalMarkup(c);
+  if (view === 'workshop') return heading + `<div class="section-heading"><span>Твой вездеход</span><small>Технологии ${levelLimit(c)}/5</small></div><div class="upgrade-grid">${(Object.keys(UPGRADES) as UpgradeId[]).map(id => {
+    const def = UPGRADES[id], level = c.upgrades[id], max = level >= MAX_LEVEL, lock = upgradeLock(c, id);
+    const affordable = !lock && c.credits >= def.prices[level] && c.research >= def.research[level];
+    const missing = max || lock ? '' : c.credits < def.prices[level] ? `Не хватает ${money(def.prices[level] - c.credits)} деталей` : c.research < def.research[level] ? `Не хватает схем: ${def.research[level] - c.research}` : 'Установить';
+    return `<article class="upgrade"><div class="upgrade-name"><span class="upgrade-icon">${def.icon}</span><h3>${def.name}</h3><small>${level}/5</small></div><div class="upgrade-levels" aria-label="Уровень ${level}">${Array.from({ length: MAX_LEVEL }, (_, i) => `<i class="${i < level ? 'filled' : i >= levelLimit(c) ? 'locked' : ''}"></i>`).join('')}</div><p>${def.effects[Math.min(level, MAX_LEVEL - 1)]}</p><button class="purchase" data-upgrade="${id}" ${!affordable ? 'disabled' : ''}><span>${max ? 'Полностью улучшен' : `${money(def.prices[level])} дет.${def.research[level] ? ` · ${def.research[level]} сх.` : ''}`}</span><small>${lock || missing}${affordable ? ' →' : ''}</small></button></article>`;
+  }).join('')}</div><p class="base-note">Новые уровни технологий — за каждые два ретранслятора.<br>Ремонт и зарядка перед выездом бесплатны.</p>`;
+  const receipt = sim.receipt, q = activeContracts(c)[0], r = REGIONS[selected];
+  const remaining = 8 - c.regions[selected].taken.length - (c.relics[selected] && !c.regions[selected].taken.includes(5) ? 1 : 0);
+  return heading + (receipt ? `<div class="receipt ${receipt.lost ? 'loss' : ''}"><strong>${receipt.lost ? 'Ты снова на станции' : `+${money(receipt.credits)} деталей · +${receipt.research} схем`}</strong><p>${receipt.lost ? 'Груз потерян. Накопления и улучшения целы.' : `Доставлено ${receipt.delivered} · спасено ${receipt.rescued}`}</p>${receipt.messages.map(m => `<small>${escape(m)}</small>`).join('')}</div>` : '') +
+    `<div class="section-heading"><span>Куда отправимся?</span><small>Районы ${REGIONS.filter((_, i) => !regionLock(c, i)).length}/7</small></div><div class="region-list">${REGIONS.map((region, i) => { const lock = regionLock(c, i); return `<button data-region="${i}" class="region ${selected === i ? 'selected' : ''} ${lock ? 'locked' : ''}" aria-pressed="${selected === i}" style="--region:${region.color}"><span class="region-number">${c.relics[i] ? '✓' : String(i + 1).padStart(2, '0')}</span><span>${region.name}</span><small>${lock ? 'Закрыт' : c.relics[i] ? 'На связи' : 'Нет связи'}</small></button>`; }).join('')}</div><div class="region-detail"><span style="color:${r.color}">${r.name}</span><p>${r.subtitle}</p><small>${regionLock(c, selected) ? `Для открытия: ${regionLock(c, selected)}` : `Находок осталось ${Math.max(0, remaining)}/8 · стоимость ×${r.value}`}</small></div>${q ? `<div class="dispatch-brief"><span>${q.name} <small>${q.progress(c)}/${q.total}</small></span><p>${q.description}</p></div>` : ''}<details class="patrol-brief"><summary>Патруль фонарей · +${90 + selected * 40} деталей</summary><p>Подойди пешком к трём полевым фонарям, проверь каждый и вернись на базу. На карте они пронумерованы. За каждый патруль — детали и одна схема. Можно повторять.</p></details><footer class="depart-footer"><button id="depart" class="pixel-button" ${regionLock(c, selected) ? 'disabled' : ''}>${regionLock(c, selected) ? 'Район пока закрыт' : 'Выехать →'}</button></footer>`;
+}
