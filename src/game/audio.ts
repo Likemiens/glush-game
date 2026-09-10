@@ -15,6 +15,9 @@ export class Soundscape {
   private noise?: AudioBuffer;
   private engine?: OscillatorNode;
   private engineGain?: GainNode;
+  private threatGain?: GainNode;
+  private threatTone?: OscillatorNode;
+  private threatPan?: StereoPannerNode;
   private reverb?: GainNode;
   private paused = false;
   private hidden = false;
@@ -59,6 +62,9 @@ export class Soundscape {
     this.wet = convolver;
     this.engine = ctx.createOscillator(); this.engine.type = 'triangle'; this.engine.frequency.value = 42;
     this.engineGain = ctx.createGain(); this.engineGain.gain.value = 0; this.engine.connect(this.engineGain); this.engineGain.connect(this.effects); this.engine.start();
+    this.threatTone = ctx.createOscillator(); this.threatTone.type = 'sine'; this.threatTone.frequency.value = 48;
+    this.threatGain = ctx.createGain(); this.threatGain.gain.value = 0; this.threatPan = ctx.createStereoPanner();
+    this.threatTone.connect(this.threatGain); this.threatGain.connect(this.threatPan); this.threatPan.connect(this.effects); this.threatTone.start();
     const wind = ctx.createBufferSource(), windFilter = ctx.createBiquadFilter();
     wind.buffer = this.noise; wind.loop = true; windFilter.type = 'lowpass'; windFilter.frequency.value = 700;
     this.windGain = ctx.createGain(); this.windGain.gain.value = .04;
@@ -93,7 +99,12 @@ export class Soundscape {
     this.groundGain?.gain.setTargetAtTime(moving ? speed * (water ? .42 : rough ? .23 : .06) : 0, t, .25);
     this.groundFilter?.frequency.setTargetAtTime(water ? 1450 : this.terrain === Terrain.Ice ? 2100 : rough ? 390 : 700, t, .4);
     this.windGain?.gain.setTargetAtTime(sim.docked ? .015 : .04 + sim.storm * .65 + sim.night * .09, t, .8);
-    this.musicFilter?.frequency.setTargetAtTime(sim.docked ? 8000 : 12000 - sim.storm * 6500 - sim.night * 1500, t, 1.4);
+    const hunter = sim.expedition.hunter;
+    const threat = !sim.docked && !['dormant', 'retreat'].includes(hunter.state) ? hunter.state === 'warning' ? .3 : Math.max(.15, 1 - Math.hypot(hunter.x - sim.player.x, hunter.y - sim.player.y) / 650) : 0;
+    this.threatGain?.gain.setTargetAtTime(threat * (.09 + Math.sin(t * 3) * .025), t, .15);
+    this.threatTone?.frequency.setTargetAtTime(44 + threat * 13 + Math.sin(t * 1.8) * 2, t, .2);
+    this.threatPan?.pan.setTargetAtTime(Math.max(-.8, Math.min(.8, (hunter.x - sim.player.x) / 400)), t, .4);
+    this.musicFilter?.frequency.setTargetAtTime(sim.docked ? 8000 : 12000 - sim.storm * 6500 - sim.night * 1500 - threat * 3500, t, 1.4);
   }
   private tone(frequency: number, delay: number, duration: number, volume: number, type: OscillatorType = 'sine', pan = 0): void {
     if (!this.ctx || !this.effects || !this.enabled || this.paused || this.hidden) return;

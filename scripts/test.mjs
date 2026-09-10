@@ -8,8 +8,8 @@ import assert from 'node:assert/strict';
 const temp = await mkdtemp(join(tmpdir(), 'quietwood-test-'));
 try {
   const bundle = join(temp, 'game.mjs');
-  await build({ stdin: { contents: "export * from './src/game/world.ts'; export * from './src/game/simulation.ts'; export * from './src/game/storage.ts'; export * from './src/game/campaign.ts'; export { trackOpacity } from './src/game/renderer.ts';", resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', outfile: bundle });
-  const { World, Simulation, SIZE, WORLD_SIZE, TILE, Terrain, angleDifference, saveGame, loadGame, createCampaign, makeExpedition, buyUpgrade, regionLock, CARGO, REGIONS, UPGRADES, levelLimit, activeContracts, trackOpacity } = await import(pathToFileURL(bundle));
+  await build({ stdin: { contents: "export * from './src/game/world.ts'; export * from './src/game/simulation.ts'; export * from './src/game/storage.ts'; export * from './src/game/campaign.ts'; export * from './src/game/inventory.ts'; export * from './src/game/commands.ts'; export * from './src/game/snapshot.ts'; export { trackOpacity } from './src/game/renderer.ts';", resolveDir: process.cwd() }, bundle: true, platform: 'node', format: 'esm', outfile: bundle });
+  const { World, Simulation, SIZE, WORLD_SIZE, TILE, Terrain, angleDifference, saveGame, loadGame, createCampaign, makeExpedition, buyUpgrade, regionLock, CARGO, REGIONS, UPGRADES, levelLimit, activeContracts, trackOpacity, pack, snapshot, execute } = await import(pathToFileURL(bundle));
   const idle = { x: 0, y: 0, boost: false, brake: false, dash: false, interact: false, pulse: false };
   let count = 0;
   const test = (name, fn) => { fn(); count++; console.log('PASS ' + name); };
@@ -72,16 +72,16 @@ try {
     const empty = flat(), heavy = flat(), improved = flat();
     heavy.cargo.push(item('heavy')); improved.cargo.push(item('heavy')); improved.campaign.upgrades.engine = 1;
     for (const sim of [empty, heavy, improved]) ticks(sim, 90, { x: 1 });
-    assert(heavy.car.speed < empty.car.speed * .85); assert(improved.car.speed > heavy.car.speed * 1.12); assert.equal(heavy.usedSlots, 2);
+    assert(heavy.car.speed < empty.car.speed * .85); assert(improved.car.speed > heavy.car.speed * 1.12); assert.equal(heavy.usedSlots, 4);
   });
-  test('Pickup requires foot interaction; cargo capacity rejects overflow', () => {
+  test('Pickup requires walking, carrying and loading; a second item cannot be carried', () => {
     const sim = flat(), cache = sim.world.caches[0];
-    Object.assign(sim.car, { x: cache.x, y: cache.y }); Object.assign(sim.player, { x: cache.x, y: cache.y });
-    sim.interact(); assert(!cache.collected); assert(!sim.driving); sim.interact(); assert(cache.collected);
-    sim.cargo.push(item('heavy', 2), item('scrap', 4));
-    const next = sim.world.caches[1]; Object.assign(sim.player, { x: next.x, y: next.y });
-    sim.interact(); assert(!next.collected); assert.equal(sim.usedSlots, 4);
-    sim.campaign.upgrades.rack = 1; sim.interact(); assert(next.collected); assert.equal(sim.usedSlots, 5);
+    Object.assign(sim.car, {x:cache.x,y:cache.y}); Object.assign(sim.player, {x:cache.x,y:cache.y});
+    sim.interact(); assert(!cache.collected); sim.interact(); assert(cache.collected && sim.carried); assert.equal(sim.cargo.length,0);
+    sim.interact(); assert.equal(sim.cargo.length,1); assert(!sim.carried); sim.interact(); assert(sim.driving);
+    const full=flat(); full.cargo=Array.from({length:6},(_,i)=>item('scrap',i)); assert(pack(full.cargo,full.rows));
+    full.driving=false; full.carried=full.makeCargo(99,'heavy'); assert(!full.loadCarried()); assert(full.carried); assert(full.full && full.returning);
+    full.campaign.upgrades.rack=2; assert(full.loadCarried()); assert.equal(full.usedSlots,16);
   });
   test('Fast rough driving damages optics; slow driving and padding protect them', () => {
     const fast = flat(Terrain.Stone), slow = flat(Terrain.Stone), padded = flat(Terrain.Stone);
@@ -129,34 +129,37 @@ try {
     tick(sim, { home: true }); assert(sim.returning); tick(sim, { home: true }); assert(!sim.returning); ticks(sim, 190); assert(!sim.signal);
   });
   test('Night does not end the trip; storms move; shelters lower exposure', () => {
-    const sim = flat(); sim.elapsed = 149.9; ticks(sim, 12); assert(sim.night > 0); assert(!sim.docked);
+    const sim = flat(); sim.elapsed = 479.9; ticks(sim, 12); assert(sim.night > 0); assert(!sim.docked);
     sim.world.lamps.length = 0; sim.elapsed = 95; const before = sim.stormAt(sim.player); sim.elapsed = 120; assert.notEqual(sim.stormAt(sim.player), before);
-    sim.exposure = 70; sim.world.lamps.push({ ...sim.player }); const light = sim.visibilityRadius; ticks(sim, 120); assert(sim.exposure < 47);
-    sim.world.lamps.length = 0; sim.elapsed = 230; assert(sim.visibilityRadius < light);
+    sim.exposure = 70; sim.world.lamps.push({ ...sim.player }); sim.memory.lamps=[1]; sim.world.lamps.push({ ...sim.player }); const light = sim.visibilityRadius; ticks(sim, 120); assert(sim.exposure < 47);
+    sim.world.lamps.length = 0; sim.elapsed = 600; assert(sim.visibilityRadius < light);
     const unlit = sim.visibilityRadius; sim.campaign.upgrades.lamps = 2; assert(sim.visibilityRadius > unlit);
   });
   test('Failure loses only trip rewards, preserves bank and upgrades, and repairs next day', () => {
-    const sim = flat(); sim.campaign.credits = 180; sim.campaign.upgrades.engine = 1; sim.cargo.push(item('relic')); sim.rescued = 1;
-    sim.exposure = 100; sim.hull = .01; sim.world.lamps.length = 0; sim.elapsed = 230; tick(sim);
+    const sim = flat(); sim.campaign.credits = 180; sim.campaign.upgrades.engine = 1; sim.cargo.push(item('relic')); sim.rescued = 0;
+    sim.exposure = 100; sim.hull = .01; sim.world.lamps.length = 0; sim.elapsed = 600; tick(sim);
     assert(sim.docked && sim.failed); assert.equal(sim.campaign.credits, 180); assert.equal(sim.campaign.upgrades.engine, 1);
     assert.equal(sim.campaign.delivered, 0); assert.equal(sim.campaign.rescued, 0); assert(!sim.campaign.relics[0]);
     sim.finish(); assert.equal(sim.campaign.credits, 180); assert.equal(sim.cargo.length, 0);
     const next = makeExpedition(sim.campaign); assert.equal(next.hull, 100); assert.equal(next.player.energy, 1);
   });
-  test('Wreck attaches on foot, pulls free, and pays only on return', () => {
-    const sim = flat(Terrain.Mud); sim.car.x = sim.player.x = sim.world.camp.x + 200;
-    const wreck = { x: sim.car.x - 22, y: sim.car.y, origin: { x: sim.car.x - 22, y: sim.car.y }, trail: [], attached: false, rescued: false, progress: 0 };
-    sim.world.wrecks.push(wreck); sim.interact(); assert(!sim.driving); sim.interact(); assert(wreck.attached);
-    sim.interact(); assert(sim.driving); ticks(sim, 400, { x: 1 }); assert(wreck.rescued); assert(!wreck.attached);
-    assert.equal(sim.rescued, 1); assert.equal(sim.campaign.credits, 0); sim.finish();
-    assert.equal(sim.receipt.credits, 180); assert.equal(sim.campaign.rescued, 1); assert(sim.campaign.claimed[1]);
-    sim.finish(); assert.equal(sim.campaign.credits, 180);
+  test('Towing only completes at the destination; circling and reattachment do not pay', () => {
+    const sim=flat(); sim.car.x=sim.player.x=sim.world.camp.x+200;
+    const wreck={ x:sim.car.x-22,y:sim.car.y,origin:{x:sim.car.x-22,y:sim.car.y},trail:[],attached:false,rescued:false,progress:0,vx:0,vy:0,tension:0 };
+    sim.world.wrecks.push(wreck); sim.interact(); sim.interact(); assert(wreck.attached); sim.interact();
+    for(let i=0;i<3600;i++) tick(sim,{x:Math.cos(i/180),y:Math.sin(i/180)});
+    assert(!wreck.rescued); assert.equal(sim.rescued,0);
+    wreck.attached=true; wreck.attachedTo=sim.actorId;
+    Object.assign(wreck,{x:sim.world.rescueZone.x+38,y:sim.world.rescueZone.y,vx:0,vy:0});
+    Object.assign(sim.car,{x:wreck.x-30,y:wreck.y,angle:Math.PI}); Object.assign(sim.player,sim.car);
+    ticks(sim,120,{x:-1}); assert(wreck.rescued); assert.equal(sim.campaign.credits,0);
+    sim.finish(); assert.equal(sim.campaign.rescued,1); assert(sim.receipt.credits>=80); const bank=sim.campaign.credits; sim.finish(); assert.equal(sim.campaign.credits,bank);
   });
   test('Winch upgrades improve towing; excessive tension releases the rope', () => {
     const make = level => { const sim = flat(Terrain.Mud); sim.car.x = sim.player.x += 200; sim.campaign.upgrades.winch = level;
-      sim.world.wrecks.push({ x: sim.car.x - 30, y: sim.car.y, origin: { x: sim.car.x - 30, y: sim.car.y }, trail: [], attached: true, rescued: false, progress: 0 }); return sim; };
+      sim.world.wrecks.push({ x: sim.car.x - 30, y: sim.car.y, origin: { x: sim.car.x - 30, y: sim.car.y }, trail: [], attached: true, rescued: false, progress: 0, vx:0,vy:0,tension:0 }); return sim; };
     const a = make(0), b = make(2); ticks(a, 90, { x: 1 }); ticks(b, 90, { x: 1 });
-    assert(b.world.wrecks[0].progress > a.world.wrecks[0].progress * 1.5);
+    assert(b.car.speed > a.car.speed * 1.1);
     a.world.wrecks[0].x -= 300; tick(a); assert(!a.world.wrecks[0].attached); assert(!a.rescued);
   });
   test('Purchases spend resources atomically and technology unlocks cap all eight branches at five', () => {
@@ -205,8 +208,8 @@ try {
       let furthest = 0; for (let i = 1; i < path.length; i++) if (clear(sim.player, path[i])) furthest = i;
       const destination = path[furthest]; path.splice(0, furthest + 1); let budget = 6000;
       while (distance(sim.player, destination) > (path.length ? sim.driving ? 9 : 3 : stop) && budget-- > 0 && !sim.docked) {
-        const d = distance(sim.player, destination), amount = Math.min(1, d / (sim.driving ? 28 : 12));
-        const current = sim.driving ? {x:0,y:0} : w.current(sim.player.x, sim.player.y), footSpeed = w.at(sim.player.x, sim.player.y) === Terrain.Water ? 31 : 54;
+        const d = distance(sim.player, destination), turn = Math.abs(angleDifference(Math.atan2(destination.y-sim.player.y,destination.x-sim.player.x),sim.car.angle)), amount = Math.min(sim.driving && turn>.5 ? .15 : 1, d / (sim.driving ? 28 : 12));
+        const current = sim.driving ? {x:0,y:0} : w.current(sim.player.x, sim.player.y), footSpeed = (w.at(sim.player.x, sim.player.y) === Terrain.Water ? 31 : 54) * (sim.carried ? sim.carried.kind==='heavy' ? .55 : .75 : 1);
         tick(sim, { x: (destination.x - sim.player.x) / d * amount - current.x * .4 / footSpeed, y: (destination.y - sim.player.y) / d * amount - current.y * .4 / footSpeed });
         assert(pass(sim.player.x, sim.player.y), 'Actor crossed a wall');
       }
@@ -216,7 +219,7 @@ try {
   const fetchAndReturn = (sim, id) => {
     const cache = sim.world.caches[id], site = sim.world.sites.find(s => s.x === cache.x && s.y === cache.y);
     navigate(sim, site ? site.entrance : cache, 12); sim.interact(); assert(!sim.driving);
-    navigate(sim, cache, 8); sim.interact(); assert(cache.collected); navigate(sim, sim.car, 12); sim.interact(); assert(sim.driving);
+    navigate(sim, cache, 8); sim.interact(); assert(cache.collected); navigate(sim, sim.car, 12); sim.interact(); assert(!sim.carried); sim.interact(); assert(sim.driving);
     navigate(sim, sim.world.camp, 25); sim.interact(); assert(sim.docked && !sim.failed); assert.equal(sim.receipt.delivered, 1);
   };
   test('24 expeditions drive, exit, collect and return without teleporting', () => {
@@ -231,28 +234,38 @@ try {
       for (const [id, target] of Object.entries(required[region])) while(c.upgrades[id] < target) assert(buyUpgrade(c, id), 'Cannot afford '+id+' before region '+region+'; bank '+c.credits+'/'+c.research);
       assert.equal(regionLock(c, region), '');
       for (const id of [0, 1, 2, 3, 4, 5, 6, 7]) {
-        sim = makeExpedition(c, region); sim.launch(); assert(!sim.world.caches[id].collected); fetchAndReturn(sim, id);
+        sim = makeExpedition(c, region); execute(sim, {type:'radio',index:0}); sim.launch(); assert(!sim.world.caches[id].collected); fetchAndReturn(sim, id);
         assert(makeExpedition(c, region).world.caches[id].collected, 'Cargo respawned');
       }
+      if (region === 0) {
+        sim = makeExpedition(c, region); execute(sim,{type:'radio',index:0}); sim.launch();
+        for (const lamp of sim.world.lamps.slice(1)) {
+          navigate(sim,lamp,12);sim.interact();navigate(sim,lamp,8);sim.interact();
+          navigate(sim,sim.car,12);execute(sim,{type:'board'});assert(sim.driving);
+        }
+        navigate(sim,sim.world.camp,25);sim.interact();assert(sim.docked);assert.equal(c.regions[0].lamps.length,3);
+        execute(sim,{type:'radio',index:0});execute(sim,{type:'radio',index:0});
+      }
     }
+    assert.equal(c.progression.radio.chapters[0],4);
     assert(c.relics.every(Boolean)); assert(c.claimed[19]); assert(c.credits > 0); assert.equal(c.delivered, 56);
     console.log('  Campaign: ' + c.expeditions + ' deliveries, ' + c.credits + ' credits left, all relays restored');
   });
   test('Save restores cargo, parked car, upgrades and map; reload cannot duplicate rewards', () => {
     const values = new Map(); globalThis.localStorage = { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
     const sim = makeExpedition(createCampaign('save-лес')); sim.launch(); ticks(sim, 120, { x: 1 }); sim.interact(); ticks(sim, 20, { y: -1 });
-    sim.world.caches[1].collected = true; sim.cargo.push(item('fragile', 1)); sim.campaign.credits = 250; sim.campaign.upgrades.rack = 1; sim.elapsed = 180;
+    sim.world.caches[1].collected = true; sim.cargo.push(item('fragile', 1)); sim.campaign.credits = 250; sim.campaign.upgrades.rack = 1; sim.elapsed = 600;
     sim.world.wrecks[0].attached = true; sim.world.wrecks[0].progress = 56;
     assert(saveGame(sim)); const restored = loadGame(); assert(restored);
     assert(restored.world.wrecks[0].attached); assert.equal(restored.world.wrecks[0].progress, 56);
     assert.equal(restored.player.x, sim.player.x); assert.equal(restored.car.y, sim.car.y); assert(!restored.driving); assert.equal(restored.cargo[0].kind, 'fragile');
     assert.equal(restored.campaign.credits, 250); assert(restored.night > 0); assert.deepEqual(restored.world.explored, sim.world.explored);
     restored.finish(); assert(saveGame(restored)); const docked = loadGame(); assert(docked?.docked); assert.deepEqual(docked.receipt, restored.receipt); const credits = docked.campaign.credits; docked.finish(); assert.equal(docked.campaign.credits, credits);
-    const valid = values.get('quietwood:campaign:v4');
-    for (const mutate of [v => { v.trip.caches = []; }, v => { v.trip.hull = -5; }, v => { v.campaign.upgrades.engine = 9; }, v => { v.campaign.survey[0] = 'bad'; }]) {
-      const data = JSON.parse(valid); mutate(data); values.set('quietwood:campaign:v4', JSON.stringify(data)); assert.equal(loadGame(), undefined);
+    const valid = values.get('quietwood:campaign:v5');
+    for (const mutate of [v => { v.trip.wrecks = []; }, v => { v.trip.hull = -5; }, v => { v.campaign.upgrades.engine = 9; }, v => { v.campaign.survey[0] = 'bad'; }]) {
+      const data = JSON.parse(valid); mutate(data); values.delete('quietwood:campaign:v5:backup'); values.set('quietwood:campaign:v5', JSON.stringify(data)); assert.equal(loadGame(), undefined);
     }
-    values.set('quietwood:campaign:v4', '{'); assert.equal(loadGame(), undefined);
+    values.delete('quietwood:campaign:v5:backup'); values.set('quietwood:campaign:v5', '{'); assert.equal(loadGame(), undefined);
     globalThis.localStorage = { getItem: () => { throw new Error('blocked'); }, setItem: () => { throw new Error('blocked'); } };
     assert.equal(loadGame(), undefined); assert.equal(saveGame(sim), false);
   });
@@ -268,39 +281,38 @@ try {
     assert(makeExpedition(loadGame().campaign, 0).world.caches[0].collected);
     assert.deepEqual(new World('persistent', 0, 1).caches.map(c=>c.kind), new World('persistent',0,2).caches.map(c=>c.kind));
   });
-  test('A full trunk immediately requests home and still allows entering the car beside another cache', () => {
-    const sim = flat(); sim.driving = false; sim.cargo.push(item('heavy',2),item('scrap',4));
-    const cache = sim.world.caches[0]; Object.assign(sim.player, cache); sim.interact();
-    assert.equal(sim.usedSlots, 4); assert(sim.full && sim.returning); assert(sim.events.some(e=>e.type==='full'));
-    Object.assign(sim.player, sim.world.caches[1]); Object.assign(sim.car, {x:sim.player.x, y:sim.player.y});
-    assert.equal(sim.interaction, 'СЕСТЬ'); sim.interact(); assert(sim.driving); assert(!sim.world.caches[1].collected);
+  test('A full trunk shows home; dropping one item frees space without respawning the source', () => {
+    const sim=flat(); sim.cargo=Array.from({length:6},(_,i)=>sim.makeCargo(i,'scrap')); assert(pack(sim.cargo,sim.rows));
+    assert(sim.full); assert(sim.dropCargo(0)); assert(!sim.full); assert.equal(sim.memory.drops.length,1); sim.driving=false;
+    Object.assign(sim.player,sim.memory.drops[0]); sim.interact(); assert(sim.carried); assert.equal(sim.memory.drops.length,0); assert(sim.loadCarried()); assert(sim.full && sim.returning);
   });
   test('Armor and battery upgrades change survival, cell lifetime and boost endurance', () => {
     const c = createCampaign(); c.upgrades.armor = 5; c.upgrades.battery = 5;
     const sim = makeExpedition(c); assert.equal(sim.hull,200); sim.launch(); sim.driving=false;
-    Object.assign(sim.player, sim.world.caches[3]); sim.interact(); assert.equal(sim.cargo[0].ttl,135);
+    Object.assign(sim.player, sim.world.caches[3]); sim.interact(); assert.equal(sim.carried.ttl,270);
     const a = flat(), b = flat(); b.campaign.upgrades.battery=5; ticks(a,120,{x:1,boost:true}); ticks(b,120,{x:1,boost:true}); assert(b.player.energy > a.player.energy+.15);
     const exposed = flat(), armored = flat(); armored.campaign.upgrades.armor=5;
-    for(const x of [exposed,armored]) {x.world.lamps.length=0;x.exposure=100;x.elapsed=230;ticks(x,30);}
+    for(const x of [exposed,armored]) {x.world.lamps.length=0;x.exposure=100;x.elapsed=600;ticks(x,30);}
     assert(armored.hull > exposed.hull);
   });
-  test('Patrols work with normal travel, earn repeatably, and prevent an empty-region progression dead end', () => {
-    const c=createCampaign(); c.regions[0].taken=[0,1,2,3,4,5,6,7]; c.regions[0].rescued=[0,1]; c.regions[0].wisps=Array.from({length:22},(_,i)=>i);
-    for(let run=0;run<2;run++) {
-      const sim=makeExpedition(c); sim.launch(); assert(!sim.returnReady);
-      for(const lamp of sim.world.lamps.slice(1)) {
-        navigate(sim,lamp,10); sim.interact(); assert(!sim.driving); navigate(sim,lamp,8); sim.interact();
-        navigate(sim,sim.car,12); sim.interact(); assert(sim.driving);
-      }
-      assert(sim.patrolComplete && sim.returnReady); navigate(sim,sim.world.camp,25); sim.interact();
-      assert(sim.docked && !sim.failed); assert(sim.receipt.credits>=90); assert(sim.receipt.research>=1);
+  test('Lamps are restored once; distinct radio deliveries fund an exhausted district', () => {
+    const c=createCampaign(); c.regions[0].taken=[0,1,2,3,4,5,6,7]; c.regions[0].rescued=[0,1];
+    let sim=makeExpedition(c); sim.launch();
+    for(const lamp of sim.world.lamps.slice(1)) {
+      navigate(sim,lamp,10); sim.interact(); navigate(sim,lamp,8); sim.interact();
+      navigate(sim,sim.car,12); sim.interact(); assert(sim.driving);
     }
-    assert.equal(c.stats.patrols,2); assert(buyUpgrade(c,'tires')); assert.equal(regionLock(c,1),'');
+    assert(sim.patrolComplete); navigate(sim,sim.world.camp,25); sim.interact(); const bank=c.credits;
+    sim=makeExpedition(c); sim.launch(); assert(sim.patrolComplete); const job={...sim.memory.job}; sim.finish(); assert.equal(c.credits,bank);
+    sim=makeExpedition(c); sim.launch(); assert.deepEqual(sim.memory.job,job);
+    navigate(sim,job,12); sim.interact(); navigate(sim,job,8); sim.interact(); assert(sim.carried); navigate(sim,sim.car,12); sim.interact(); sim.interact();
+    navigate(sim,sim.world.camp,25); sim.interact(); assert(c.credits>bank); assert(c.regions[0].job.delivered);
+    sim=makeExpedition(c); sim.launch(); assert(sim.memory.job.id>job.id); assert.equal(c.stats.patrols,1);
   });
   test('A lost relay heart remains recoverable while ordinary lost cargo stays depleted', () => {
     const sim=makeExpedition(createCampaign()); sim.launch(); sim.world.caches[5].collected=true; sim.world.caches[0].collected=true;
     sim.cargo.push(item('relic',5), item('scrap',0)); sim.finish(true);
-    const next=makeExpedition(sim.campaign); assert(!next.world.caches[5].collected); assert(next.world.caches[0].collected); assert(!next.campaign.relics[0]);
+    const next=makeExpedition(sim.campaign); assert(next.world.caches[5].collected); assert(next.world.caches[0].collected); assert(!next.campaign.relics[0]); assert.equal(next.memory.drops.length,2);
   });
   test('Quest chains unlock gradually; repeat settlement never pays twice', () => {
     const c=createCampaign(); assert.equal(activeContracts(c).length,3);
@@ -309,24 +321,34 @@ try {
     assert(c.claimed[4] && c.claimed[9]); const bank=c.credits;
     sim=makeExpedition(c); sim.launch(); sim.finish(); assert.equal(c.credits,bank);
   });
-  test('V3 migration preserves bank, six existing upgrades, active cargo, explored map and current depletion', () => {
-    const values=memoryStore(), c=createCampaign('legacy'); c.credits=340; c.research=4; c.upgrades.winch=1;c.upgrades.rack=2;c.day=2;
-    const sim=makeExpedition(c);sim.launch();sim.world.caches[4].kind='volatile';sim.world.caches[4].collected=true;sim.cargo.push(item('volatile',4));sim.checkedLamps=[1];
-    assert(saveGame(sim));const legacy=JSON.parse(values.get('quietwood:campaign:v4'));legacy.version=3;
-    for(const key of ['relics','survey'])legacy.campaign[key]=legacy.campaign[key].slice(0,3);legacy.campaign.claimed=legacy.campaign.claimed.slice(0,4);
-    delete legacy.campaign.upgrades.armor;delete legacy.campaign.upgrades.battery;
-    for(const key of ['regions','scouted','stats'])delete legacy.campaign[key];delete legacy.trip.checkedLamps;legacy.trip.caches.forEach(c=>delete c.kind);
-    values.clear();values.set('quietwood:campaign:v3',JSON.stringify(legacy));const restored=loadGame();assert(restored);
-    assert.equal(restored.campaign.credits,340);assert.equal(restored.campaign.research,4);assert.equal(restored.campaign.upgrades.winch,1);assert.equal(restored.capacity,8);
-    assert.equal(restored.cargo[0].kind,'volatile');assert.equal(restored.campaign.regions.length,7);assert(restored.campaign.regions[0].taken.includes(4));
-    assert(saveGame(restored));assert(loadGame());assert(values.has('quietwood:campaign:v3'));
-  });
-  test('Patrol state survives reload; malformed memory and duplicate patrol entries are rejected', () => {
-    const values=memoryStore(), sim=makeExpedition(createCampaign());sim.launch();sim.checkedLamps=[1,2];assert(saveGame(sim));assert.deepEqual(loadGame().checkedLamps,[1,2]);
-    const valid=values.get('quietwood:campaign:v4');
-    for(const mutate of [v=>v.trip.checkedLamps=[1,1],v=>v.trip.checkedLamps=[0],v=>v.campaign.regions[0].taken=[99],v=>v.campaign.regions[0].rescued=[0,0],v=>v.version='4']) {
-      const data=JSON.parse(valid);mutate(data);values.set('quietwood:campaign:v4',JSON.stringify(data));assert.equal(loadGame(),undefined);
+  const legacySave = sim => {
+    sim.rememberWorld(); const data=snapshot(sim);
+    return {version:4,campaign:data.campaign,trip:{...data.trip,energy:sim.player.energy,caches:sim.world.caches.map(c=>({collected:c.collected,discovered:c.discovered,kind:c.kind})),wisps:sim.world.wisps.map(w=>w.collected)}};
+  };
+  test('V3 and V4 migration retain property, terrain, known lamps and a complete backup', () => {
+    for(const version of [3,4]) {
+      const values=memoryStore(), c=createCampaign('legacy'); c.credits=340;c.research=4;c.upgrades.winch=1;c.upgrades.rack=2;c.day=2;
+      const sim=makeExpedition(c);sim.launch();sim.world.caches[4].kind='volatile';sim.world.caches[4].collected=true;sim.cargo.push(item('volatile',4));sim.checkedLamps=[1];
+      const legacy=legacySave(sim); legacy.version=version;
+      if(version===3) {
+        for(const key of ['relics','survey'])legacy.campaign[key]=legacy.campaign[key].slice(0,3);legacy.campaign.claimed=legacy.campaign.claimed.slice(0,4);
+        delete legacy.campaign.upgrades.armor;delete legacy.campaign.upgrades.battery;
+        for(const key of ['regions','scouted','stats'])delete legacy.campaign[key];delete legacy.trip.checkedLamps;legacy.trip.caches.forEach(c=>delete c.kind);
+      }
+      const original=JSON.stringify(legacy); values.set('quietwood:campaign:v'+version,original); const restored=loadGame(); assert(restored);
+      assert.equal(restored.campaign.credits,340);assert.equal(restored.campaign.research,4);assert.equal(restored.campaign.upgrades.winch,1);assert.equal(restored.capacity,20);
+      assert.equal(restored.cargo[0].kind,'volatile');assert(restored.cargo[0].placement);assert(restored.memory.taken.includes(4));
+      assert.deepEqual(restored.world.tiles,sim.world.tiles); if(version===4) assert.deepEqual(restored.memory.lamps,[1]);
+      assert.equal(values.get('quietwood:before-v5'),original);assert(saveGame(restored));assert(loadGame());assert(values.has('quietwood:campaign:v'+version));
     }
+  });
+  test('V5 keeps restored light; invalid saves are rejected and a valid checkpoint recovers', () => {
+    const values=memoryStore(), sim=makeExpedition(createCampaign());sim.launch();sim.checkedLamps=[1,2];assert(saveGame(sim));assert.deepEqual(loadGame().checkedLamps,[1,2]);
+    const valid=values.get('quietwood:campaign:v5');
+    for(const mutate of [v=>v.trip.checkedLamps=[1,1],v=>v.trip.checkedLamps=[0],v=>v.campaign.regions[0].taken=[99],v=>v.campaign.regions[0].rescued=[0,0],v=>v.version='5']) {
+      const data=JSON.parse(valid);mutate(data);values.delete('quietwood:campaign:v5:backup');values.set('quietwood:campaign:v5',JSON.stringify(data));assert.equal(loadGame(),undefined);
+    }
+    values.set('quietwood:campaign:v5:backup',valid); assert(loadGame());
   });
   console.log('\n' + count + ' checks passed.');
 } finally {

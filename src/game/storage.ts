@@ -2,10 +2,13 @@ import { Simulation } from './simulation';
 import { SIZE, World } from './world';
 import { CARGO, CONTRACTS, createCampaign, MAX_LEVEL, REGIONS, UPGRADES } from './campaign';
 import type { Campaign, CargoKind, UpgradeId } from './campaign';
+import { restoreSnapshot, snapshot } from './snapshot';
+import { createRegionMemory } from './features';
+import { pack } from './inventory';
 
-const SAVE_KEY = 'quietwood:campaign:v4';
-const LEGACY_KEY = 'quietwood:campaign:v3';
-const SETTINGS_KEY = 'quietwood:settings:v2';
+const SAVE_KEY = 'quietwood:campaign:v5';
+const LEGACY_KEY = 'quietwood:campaign:v4';
+const SETTINGS_KEY = 'quietwood:settings:v3';
 export type Settings = { sound: boolean; music: number; effects: number; reducedMotion: boolean; zoom: number };
 const object = (v: unknown): v is Record<string, unknown> => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
 const finite = (v: unknown, min = 0, max = 1e8): v is number => typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
@@ -30,16 +33,27 @@ export function makeExpedition(campaign: Campaign, region = 0): Simulation {
 }
 export function saveGame(sim: Simulation): boolean {
   try {
-    sim.rememberWorld();
-    sim.campaign.survey[sim.world.region] = encodeSurvey(sim.world);
-    localStorage.setItem(SAVE_KEY, JSON.stringify({ version: 4, campaign: sim.campaign,
-      trip: { region: sim.world.region, day: sim.world.day, player: { x: sim.player.x, y: sim.player.y }, car: { x: sim.car.x, y: sim.car.y, angle: sim.car.angle },
-        driving: sim.driving, docked: sim.docked, hull: sim.hull, exposure: sim.exposure, energy: sim.player.energy,
-        elapsed: sim.elapsed, cargo: sim.cargo, caches: sim.world.caches.map(c => ({ collected: c.collected, discovered: c.discovered, kind: c.kind })),
-        wisps: sim.world.wisps.map(w => w.collected), wrecks: sim.world.wrecks.map(w => ({ x: w.x, y: w.y, rescued: w.rescued, attached: w.attached, progress: w.progress })),
-        rescued: sim.rescued, checkedLamps: sim.checkedLamps, returning: sim.returning, failed: sim.failed, receipt: sim.receipt } }));
+    if (sim.cargo.some(item => !item.placement)) pack(sim.cargo, sim.rows);
+    const serialized = JSON.stringify(snapshot(sim));
+    const previous = localStorage.getItem(SAVE_KEY);
+    if (previous) localStorage.setItem(SAVE_KEY + ':backup', previous);
+    localStorage.setItem(SAVE_KEY, serialized);
     return true;
   } catch { return false; }
+}
+export function loadGame(): Simulation | undefined {
+  for (const key of [SAVE_KEY, SAVE_KEY + ':backup']) {
+    try { const data = localStorage.getItem(key); if (data) return restoreSnapshot(JSON.parse(data)); } catch { /* Try the last complete checkpoint. */ }
+  }
+  const legacy = loadLegacy();
+  if (legacy) {
+    legacy.memory.lamps = [...legacy.checkedLamps]; legacy.activatedThisTrip = [];
+    legacy.cargo.forEach(item => { item.uid = `${legacy.world.region}:cache:${item.id}`; item.region = legacy.world.region; });
+    pack(legacy.cargo, legacy.rows); legacy.rememberWorld();
+    try { const old = localStorage.getItem(LEGACY_KEY) ?? localStorage.getItem('quietwood:campaign:v3'); if (old) localStorage.setItem('quietwood:before-v5', old); } catch { /* The original version remains untouched. */ }
+    saveGame(legacy);
+  }
+  return legacy;
 }
 function migrateLegacy(raw: Record<string, unknown>): boolean {
   if (!object(raw.campaign) || !object(raw.trip)) return false;
@@ -51,7 +65,7 @@ function migrateLegacy(raw: Record<string, unknown>): boolean {
   c.survey = [...c.survey, '', '', '', ''];
   c.upgrades = { ...c.upgrades, armor: 0, battery: 0 };
   c.regions = fresh.regions; c.scouted = fresh.scouted; c.stats = fresh.stats;
-  t.checkedLamps = [];
+  if (!indices(t.checkedLamps, 3) || t.checkedLamps.includes(0)) t.checkedLamps = [];
   if (integer(t.region, 0, 2) && Array.isArray(t.caches)) {
     fresh.regions[t.region].taken = t.caches.flatMap((cache, i) => object(cache) && cache.collected === true ? [i] : []);
     if (Array.isArray(t.wrecks)) fresh.regions[t.region].rescued = t.wrecks.flatMap((w, i) => object(w) && w.rescued === true ? [i] : []);
@@ -60,9 +74,9 @@ function migrateLegacy(raw: Record<string, unknown>): boolean {
   }
   return true;
 }
-export function loadGame(): Simulation | undefined {
+function loadLegacy(): Simulation | undefined {
   try {
-    const raw: unknown = JSON.parse(localStorage.getItem(SAVE_KEY) ?? localStorage.getItem(LEGACY_KEY) ?? 'null');
+    const raw: unknown = JSON.parse(localStorage.getItem(LEGACY_KEY) ?? localStorage.getItem('quietwood:campaign:v3') ?? 'null');
     if (!object(raw) || raw.version !== 3 && raw.version !== 4 || !object(raw.campaign) || !object(raw.trip)) return;
     const legacy = raw.version === 3;
     if (legacy && !migrateLegacy(raw)) return;
@@ -77,7 +91,7 @@ export function loadGame(): Simulation | undefined {
     if (!Array.isArray(saved.scouted) || saved.scouted.length !== regionCount || !saved.scouted.every(n => integer(n, 0, SIZE * SIZE)) || !object(saved.stats)) return;
     for (const key of Object.keys(campaign.stats) as (keyof Campaign['stats'])[]) { if (!integer(saved.stats[key], 0, 1e8)) return; campaign.stats[key] = saved.stats[key]; }
     campaign.relics = saved.relics; campaign.claimed = saved.claimed; campaign.survey = saved.survey; campaign.scouted = saved.scouted;
-    campaign.regions = saved.regions.map(r => ({ taken: [...r.taken], rescued: [...r.rescued], wisps: [...r.wisps] }));
+    campaign.regions = saved.regions.map(r => ({ ...createRegionMemory(), taken: [...r.taken], rescued: [...r.rescued], wisps: [...r.wisps] }));
     if (!integer(trip.region, 0, regionCount - 1) || !integer(trip.day, 1, campaign.day) || !object(trip.player) || !object(trip.car)) return;
     const world = new World(campaign.seed, trip.region, trip.day), sim = new Simulation(world, campaign);
     if (!restoreSurvey(world, campaign.survey[trip.region])) return;
@@ -112,7 +126,7 @@ export function loadGame(): Simulation | undefined {
     if (sim.usedSlots > sim.capacity || trip.docked && (sim.cargo.length > 0 || trip.rescued > 0)) return;
     Object.assign(sim.player, { x: trip.player.x, y: trip.player.y, energy: trip.energy });
     Object.assign(sim.car, { x: trip.car.x, y: trip.car.y, angle: trip.car.angle });
-    sim.driving = trip.driving; sim.docked = trip.docked; sim.elapsed = trip.elapsed; sim.time = trip.elapsed; sim.remaining = Math.max(0, 150 - sim.elapsed);
+    sim.driving = trip.driving; sim.docked = trip.docked; sim.elapsed = trip.elapsed; sim.time = trip.elapsed; sim.remaining = Math.max(0, 480 - sim.elapsed);
     sim.hull = trip.hull; sim.exposure = trip.exposure; sim.rescued = trip.rescued; sim.checkedLamps = trip.checkedLamps; sim.returning = trip.returning === true || sim.full; sim.failed = trip.failed === true;
     if (sim.driving) { sim.player.x = sim.car.x; sim.player.y = sim.car.y; }
     const receipt = trip.receipt;
@@ -124,12 +138,13 @@ export function loadGame(): Simulation | undefined {
   } catch { return; }
 }
 export function readSettings(): Settings {
-  const defaults: Settings = { sound: true, music: .55, effects: .65, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, zoom: 3 };
+  const defaults: Settings = { sound: true, music: .55, effects: .65, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches, zoom: 4 };
   try {
-    const data: unknown = JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? '{}');
+    const current = localStorage.getItem(SETTINGS_KEY);
+    const data: unknown = JSON.parse(current ?? localStorage.getItem('quietwood:settings:v2') ?? '{}');
     if (!object(data)) return defaults;
     return { sound: typeof data.sound === 'boolean' ? data.sound : defaults.sound, music: finite(data.music, 0, 1) ? data.music : defaults.music, effects: finite(data.effects, 0, 1) ? data.effects : defaults.effects,
-      reducedMotion: typeof data.reducedMotion === 'boolean' ? data.reducedMotion : defaults.reducedMotion, zoom: [2, 3, 4].includes(Number(data.zoom)) ? Number(data.zoom) : defaults.zoom };
+      reducedMotion: typeof data.reducedMotion === 'boolean' ? data.reducedMotion : defaults.reducedMotion, zoom: current && [2, 3, 4].includes(Number(data.zoom)) ? Number(data.zoom) : defaults.zoom };
   } catch { return defaults; }
 }
 export function storeSettings(settings: Settings): void { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* Settings still apply to this session. */ } }

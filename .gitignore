@@ -3,3 +3,9 @@ dist/
 .vercel/
 .env*
 .DS_Store
+.data/
+.wrangler/
+server-dist/
+.preview*.png
+.coop-preview.png
+test-results/

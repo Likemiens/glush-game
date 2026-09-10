@@ -1,0 +1,11 @@
+node_modules
+.git
+.data
+.wrangler
+.vercel
+.env*
+dist
+server-dist
+test-results
+.preview*.png
+.coop-preview.png

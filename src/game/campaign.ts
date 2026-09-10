@@ -1,3 +1,6 @@
+import { createProgression, createRegionMemory } from './features';
+import type { Progression, RegionMemory } from './features';
+export type { RegionMemory } from './features';
 export type UpgradeId = 'engine' | 'tires' | 'lamps' | 'rack' | 'scanner' | 'winch' | 'armor' | 'battery';
 export type CargoKind = 'scrap' | 'heavy' | 'fragile' | 'volatile' | 'relic';
 export const CARGO: Record<CargoKind, { name: string; short: string; slots: number; value: number; color: string; hint: string }> = {
@@ -15,7 +18,7 @@ export const UPGRADES: Record<UpgradeId, Upgrade> = {
   engine: upgrade('Двигатель', '↗', 80, Array.from({ length: 5 }, (_, i) => '+' + (i + 1) * 12 + '% скорости. Больше тяги с грузом')),
   tires: upgrade('Шины', '◉', 65, ['Лучше едут по грязи. Открывают топи', 'Сцепление на льду и защита от тряски', 'Уверенный ход по песку и пеплу', 'Почти не скользят на льду', 'Максимальная проходимость']),
   lamps: upgrade('Фары', '☀', 65, ['Больше обзор, меньше воздействия тумана', 'Широкий свет, надёжнее ночью', 'Проникают сквозь пепельную бурю', 'Освещают хрустальную долину', 'Максимальная защита от тумана']),
-  rack: upgrade('Багажник', '▦', 70, Array.from({ length: 5 }, (_, i) => (6 + i * 2) + ' мест. Лучше крепления для оптики')),
+  rack: upgrade('Багажник', '▦', 70, Array.from({ length: 5 }, (_, i) => 'Сетка 4 × ' + (4 + i) + '. Лучше крепления для оптики')),
   scanner: upgrade('Сканер', '◎', 70, Array.from({ length: 5 }, (_, i) => 'Сигнал с ' + (390 + i * 140) + ' м. Точнее направление')),
   winch: upgrade('Лебёдка', '↔', 60, ['Быстрее вытаскивает машины', 'Длиннее трос, больше тяги', 'Усиленный трос для тяжёлых спасений', 'Быстрая буксировка', 'Максимальная тяга и длина троса']),
   armor: upgrade('Защита кузова', '◇', 75, Array.from({ length: 5 }, (_, i) => (120 + i * 20) + ' прочности. Меньше урон от ударов')),
@@ -30,12 +33,12 @@ export const REGIONS = [
   { name: 'Пепельный край', subtitle: 'Вулканический пепел и опасные бури', risk: 2.5, color: '#bb877b', trees: ['#9b8178', '#857373', '#b09a89'], value: 2.85 },
   { name: 'Хрустальная долина', subtitle: 'Кристаллы, северное сияние и последний сигнал', risk: 2.9, color: '#bca7d3', trees: ['#9da5cc', '#b7a2cb', '#a9c6d5'], value: 3.3 },
 ] as const;
-export interface RegionMemory { taken: number[]; rescued: number[]; wisps: number[] }
 export interface Campaign {
   seed: string; day: number; credits: number; research: number;
   delivered: number; rescued: number; expeditions: number; earned: number;
   upgrades: Record<UpgradeId, number>; relics: boolean[]; claimed: boolean[]; survey: string[];
   regions: RegionMemory[]; scouted: number[];
+  progression: Progression;
   stats: { fragile: number; volatile: number; heavy: number; patrols: number; cleanRuns: number; nightRuns: number };
 }
 export type Receipt = { credits: number; research: number; delivered: number; rescued: number; lost: boolean; messages: string[] };
@@ -71,11 +74,12 @@ export function createCampaign(seed = 'MOSS-0842'): Campaign {
   return { seed, day: 1, credits: 0, research: 0, delivered: 0, rescued: 0, expeditions: 0, earned: 0,
     upgrades: { engine: 0, tires: 0, lamps: 0, rack: 0, scanner: 0, winch: 0, armor: 0, battery: 0 },
     relics: REGIONS.map(() => false), claimed: CONTRACTS.map(() => false), survey: REGIONS.map(() => ''),
-    regions: REGIONS.map(() => ({ taken: [], rescued: [], wisps: [] })), scouted: REGIONS.map(() => 0),
+    regions: REGIONS.map(createRegionMemory), scouted: REGIONS.map(() => 0), progression: createProgression(),
     stats: { fragile: 0, volatile: 0, heavy: 0, patrols: 0, cleanRuns: 0, nightRuns: 0 } };
 }
 export function levelLimit(c: Campaign): number { return Math.min(MAX_LEVEL, 2 + Math.floor(relays(c) / 2)); }
-export function regionLock(c: Campaign, region: number): string {
+export function regionLock(c: Campaign, region: number, shared = false): string {
+  if (shared) return regionLock({ ...c, upgrades: { engine: 5, tires: 5, lamps: 5, rack: 5, scanner: 5, winch: 5, armor: 5, battery: 5 } }, region);
   if (region === 0) return '';
   if (region === 1) return c.delivered < 3 && c.stats.patrols < 1 ? 'Доставь 3 находки или заверши патруль' : c.upgrades.tires < 1 ? 'Нужны шины I' : '';
   if (region === 2) return !c.relics[1] ? 'Верни сердце топей' : c.upgrades.lamps < 1 ? 'Нужны фары I' : c.upgrades.scanner < 1 ? 'Нужен сканер I' : '';

@@ -1,17 +1,39 @@
 {
   "name": "glush-game",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "node scripts/test.mjs",
-    "standalone": "npm run build && node scripts/standalone.mjs"
+    "test": "node scripts/test.mjs && node --import tsx --test tests/*.test.ts",
+    "standalone": "npm run build && node scripts/standalone.mjs",
+    "server": "tsx server/node.ts",
+    "server:check": "tsc --noEmit -p server/tsconfig.json && tsc --noEmit -p server/tsconfig.worker.json",
+    "server:build": "npm run server:check && node scripts/build-server.mjs",
+    "server:start": "node server-dist/node.mjs",
+    "cloudflare:dev": "wrangler dev --port 8788",
+    "cloudflare:check": "wrangler deploy --dry-run --outdir .wrangler/build",
+    "cloudflare:deploy": "wrangler deploy"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260910.1",
+    "@types/node": "^22.20.2",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.23.13",
     "typescript": "~5.9.3",
-    "vite": "^7.1.5"
+    "vite": "^7.1.5",
+    "wrangler": "^4.130.0"
+  },
+  "dependencies": {
+    "ws": "^8.21.3",
+    "zod": "^4.6.1"
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "overrides": {
+    "sharp": "0.35.4"
   }
 }

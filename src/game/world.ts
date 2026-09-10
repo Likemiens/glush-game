@@ -7,7 +7,7 @@ export type Point = { x: number; y: number };
 export type Cache = Point & { id: number; kind: CargoKind; collected: boolean; discovered: boolean; site: boolean };
 export type Wisp = Point & { collected: boolean; phase: number };
 export type Site = Point & { entrance: Point; kind: 'ruin' | 'island' };
-export type Wreck = Point & { origin: Point; rescued: boolean; attached: boolean; progress: number; trail: Point[] };
+export type Wreck = Point & { origin: Point; rescued: boolean; attached: boolean; attachedTo?: string; helpers?: string[]; progress: number; trail: Point[]; vx: number; vy: number; tension: number };
 
 export function hashSeed(value: string): number {
   let h = 2166136261;
@@ -54,6 +54,8 @@ export class World {
   readonly sites: Site[] = [];
   readonly lamps: Point[] = [];
   readonly wrecks: Wreck[] = [];
+  readonly rare: Point;
+  readonly rescueZone: Point;
   exploredCount = 0;
   readonly seedNumber: number;
 
@@ -109,7 +111,7 @@ export class World {
       }
       this.clearCircle(origin.x, origin.y, 4, region === 4 ? Terrain.Sand : region === 5 ? Terrain.Ash : Terrain.Mud);
       const trail = Array.from({ length: 30 }, (_, n) => ({ x: origin.x - Math.cos(angle) * n * 4, y: origin.y - Math.sin(angle) * n * 4 + Math.sin(n * .2) * 8 }));
-      this.wrecks.push({ ...origin, origin: { ...origin }, rescued: false, attached: false, progress: 0, trail });
+      this.wrecks.push({ ...origin, origin: { ...origin }, rescued: false, attached: false, progress: 0, trail, vx: 0, vy: 0, tension: 0 });
     }
     for (const cache of this.caches.filter(c => c.site)) this.buildSite(cache, cache.id === 7 ? 'island' : 'ruin');
     for (let i = 0; i < 14; i++) {
@@ -122,6 +124,20 @@ export class World {
       const y = this.camp.y + (cache.y - this.camp.y) * .6;
       if (this.drivable(x, y)) this.wisps.push({ x, y, collected: false, phase: rng() * Math.PI * 2 });
     }
+    this.rare = this.findClearing('rare', 850);
+    const posts = Array.from({ length: 24 }, (_, i) => this.findClearing(`rescue:${i}`, 1100));
+    posts.sort((a, b) => Math.min(...this.wrecks.map(w => Math.hypot(w.x - b.x, w.y - b.y))) - Math.min(...this.wrecks.map(w => Math.hypot(w.x - a.x, w.y - a.y))));
+    this.rescueZone = posts[0];
+  }
+
+  findClearing(key: string, distance = 600): Point {
+    const rng = random(hashSeed(`${this.seed}:${this.region}:${key}`));
+    for (let i = 0; i < 1000; i++) {
+      const a = rng() * Math.PI * 2, r = distance * (.85 + rng() * .15);
+      const p = { x: this.camp.x + Math.cos(a) * r, y: this.camp.y + Math.sin(a) * r };
+      if (this.drivable(p.x, p.y, 28) && this.sites.every(s => Math.hypot(s.x - p.x, s.y - p.y) > 120)) return p;
+    }
+    return { x: this.camp.x + 60, y: this.camp.y };
   }
 
   private buildSite(cache: Cache, kind: Site['kind']): void {

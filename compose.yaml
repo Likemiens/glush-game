@@ -1,0 +1,13 @@
+services:
+  glush:
+    build: .
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-http://127.0.0.1:8787,http://localhost:8787,https://glush-game.vercel.app}"
+      PUBLIC_SERVER_URL: "${PUBLIC_SERVER_URL:-}"
+    volumes:
+      - worlds:/data
+    restart: unless-stopped
+volumes:
+  worlds:

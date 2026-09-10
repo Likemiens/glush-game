@@ -2,6 +2,8 @@ import { SIZE, Terrain, TILE, WORLD_SIZE } from './world';
 import type { Point } from './world';
 import type { Simulation, Track } from './simulation';
 import { CARGO, REGIONS } from './campaign';
+import { headlightField, lightKey, lightPoint } from './lighting';
+import { RARE_PLACES } from './features';
 
 const BG = '#17120f';
 const clamp = (x: number, a: number, b: number): number => Math.max(a, Math.min(b, x));
@@ -31,8 +33,11 @@ export class Renderer {
   readonly ctx: CanvasRenderingContext2D;
   width = 0;
   height = 0;
-  scale = 3;
-  zoom = 3;
+  scale = 4;
+  zoom = 4;
+  peers: Simulation[] = [];
+  carTows: { id: string; target: string }[] = [];
+  pings: (Point & { label: string; ttl: number })[] = [];
   reducedMotion = false;
   camera: Point = { x: 0, y: 0 };
   private ground: HTMLCanvasElement[][] = [];
@@ -43,11 +48,15 @@ export class Renderer {
   private shake = 0;
   private oldBoost = false;
   private spriteRegion = -1;
+  private lightSignature = '';
+  private lights = new Map<number, number>();
+  private labels = new Map<string, HTMLCanvasElement>();
 
   constructor(readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) throw new Error('Canvas 2D недоступен');
     this.ctx = ctx; this.buildSprites(); this.resize();
+    void document.fonts.ready.then(() => this.labels.clear());
   }
 
   resize(): void {
@@ -59,6 +68,7 @@ export class Renderer {
   }
 
   reset(sim: Simulation): void {
+    this.lightSignature = '';
     if (this.spriteRegion !== sim.world.region) this.buildSprites(sim.world.region);
     this.camera.x = sim.player.x; this.camera.y = sim.player.y;
     this.visibility.fill(0); this.levels.fill(0); this.shake = 0;
@@ -98,8 +108,8 @@ export class Renderer {
         } else if (type === Terrain.Deep) {
           c.fillStyle = '#243840'; c.fillRect(0, 0, TILE, TILE); c.fillStyle = '#547787'; c.fillRect(1, 4, 5, 1); c.fillRect(7, 9, 4, 1);
         } else if (type === Terrain.Stone) {
-          c.fillStyle = v % 3 ? '#c7bdb7' : '#b2a7a2';
-          for (let y = 0; y < TILE; y++) for (let x = 0; x < TILE; x++) if ((x + y) % 2 === 0) c.fillRect(x, y, 1, 1);
+          c.fillStyle = '#423b31'; c.fillRect(0,0,TILE,TILE);
+          c.fillStyle = '#8f8270'; c.fillRect(1+v%3,3,3,1); c.fillRect(7,7+v%3,2,1); c.fillStyle='#655a49'; c.fillRect(5,1,1,2);
         } else if (type === Terrain.Water) {
           c.fillStyle = v % 3 ? '#6d8795' : '#8294a0';
           const phase = v % 4;
@@ -204,11 +214,16 @@ export class Renderer {
     const x0 = Math.max(0, Math.floor(-ox / TILE) - 2), x1 = Math.min(SIZE - 1, Math.ceil((w - ox) / TILE) + 2);
     const y0 = Math.max(0, Math.floor(-oy / TILE) - 2), y1 = Math.min(SIZE - 1, Math.ceil((h - oy) / TILE) + 3);
     const px = Math.floor(p.x / TILE), py = Math.floor(p.y / TILE), radius = sim.visibilityRadius;
+    const crew = [sim, ...this.peers];
+    const sources = crew.filter(s => Math.abs(s.car.x - this.camera.x) < w / 2 + 200 && Math.abs(s.car.y - this.camera.y) < h / 2 + 200).map(s => ({ x: Math.round(s.car.x / 2) * 2, y: Math.round(s.car.y / 2) * 2, angle: Math.round(s.car.angle * 50) / 50, headlights: s.headlights, level: s.campaign.upgrades.lamps, flood: s.hasModule('light') }));
+    const signature = JSON.stringify(sources);
+    if (signature !== this.lightSignature) { this.lights = headlightField(world, sources); this.lightSignature = signature; }
+    const lights = this.lights;
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
       const i = y * SIZE + x, d = Math.hypot(x - px, y - py);
       const jitter = (world.variants[i] - .5) * .75;
-      const lampLight = world.lamps.some(l => Math.hypot(l.x / TILE - x, l.y / TILE - y) < 3.5 && Math.hypot(l.x - p.x, l.y - p.y) < 230);
-      const beam = sim.driving && Math.cos(Math.atan2(y - py, x - px) - sim.car.angle) > .82 && d < radius + 2 + sim.campaign.upgrades.lamps;
+      const lampLight = world.lamps.some((l, index) => (index === 0 || sim.memory.lamps.includes(index)) && Math.hypot(l.x / TILE - x, l.y / TILE - y) < 4.5 && Math.hypot(l.x - p.x, l.y - p.y) < 230);
+      const beam = (lights.get(lightKey(x * TILE + 6, y * TILE + 6)) ?? 0) > .15;
       const light = lampLight || d + jitter < radius - 2 ? 1 : d + jitter < radius - .8 || beam ? .65 : d + jitter < radius ? .4 : 0;
       const memory = world.explored[i] ? .18 : 0;
       const target = Math.max(memory, light);
@@ -218,18 +233,24 @@ export class Renderer {
       const type = world.tiles[i], v = Math.floor(world.variants[i] * 16);
       const variant = type === Terrain.Water && !this.reducedMotion ? (v + Math.floor(sim.time * 4)) % 16 : v;
       c.drawImage(this.ground[type][variant], x * TILE, y * TILE);
+      const road = sim.memory.roads[`${Math.floor(x / 2)}:${Math.floor(y / 2)}`] ?? 0;
+      if (road >= 3) { c.fillStyle = '#a79264'; c.globalAlpha = .12 + road * .02; c.fillRect(x * TILE + 3, y * TILE, 2, TILE); c.fillRect(x * TILE + 8, y * TILE, 2, TILE); c.globalAlpha = 1; }
     }
     for (const wreck of world.wrecks) {
       c.fillStyle = '#88755d'; c.globalAlpha = .6;
       for (let i = 1; i < wreck.trail.length; i++) for (const side of [-3, 3]) pixelLine(c, wreck.trail[i - 1].x, wreck.trail[i - 1].y + side, wreck.trail[i].x, wreck.trail[i].y + side);
     }
-    for (const track of sim.tracks) {
+    for (const driver of crew) for (const track of driver.tracks) {
       if (track.bx < -ox - 15 || track.by < -oy - 15 || track.bx > w - ox + 15 || track.by > h - oy + 15) continue;
       c.globalAlpha = trackOpacity(track);
       c.fillStyle = track.mud ? '#a48a62' : track.water ? '#a8b3ba' : track.strong ? '#e4d8cf' : '#bdb3a8';
       pixelLine(c, track.ax, track.ay, track.bx, track.by);
     }
     c.globalAlpha = 1;
+    for (const tow of this.carTows) {
+      const a = crew.find(s => s.actorId === tow.id), b = crew.find(s => s.actorId === tow.target);
+      if (a && b && !a.docked && !b.docked) { c.fillStyle = '#b6c7b0'; pixelLine(c, a.car.x, a.car.y, b.car.x, b.car.y); }
+    }
     const objects: { y: number; draw: () => void }[] = [];
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
       const i = y * SIZE + x, type = world.tiles[i], v = world.variants[i];
@@ -246,7 +267,11 @@ export class Renderer {
       } });
     }
     objects.push({ y: world.camp.y, draw: () => this.drawBase(world.camp, sim.returnReady, sim.time) });
-    for (const cache of world.caches) {
+    objects.push({ y: world.rescueZone.y, draw: () => { this.drawBase(world.rescueZone, true, sim.time); this.label(world.rescueZone.x, world.rescueZone.y - 32, 'SOS', '#a7c4a3'); } });
+    objects.push({ y: world.rare.y, draw: () => this.drawRare(sim) });
+    const extra = sim.memory.drops.map(d => ({ ...d, ...d.item, collected: false }));
+    const job = sim.memory.job;
+    for (const cache of [...world.caches, ...extra, ...(job && !job.taken ? [{ ...job, collected: false }] : [])]) {
       if (cache.collected) continue;
       objects.push({ y: cache.y, draw: () => {
         c.globalAlpha = 1; const x = Math.round(cache.x), y = Math.round(cache.y);
@@ -260,7 +285,7 @@ export class Renderer {
     }
     for (const [index, lamp] of world.lamps.entries()) objects.push({ y: lamp.y, draw: () => {
       c.globalAlpha = 1; c.fillStyle = '#8c8154'; c.fillRect(Math.round(lamp.x), Math.round(lamp.y) - 15, 1, 16);
-      c.fillStyle = sim.checkedLamps.includes(index) ? '#a1c99b' : '#e4d398'; c.fillRect(Math.round(lamp.x) - 2, Math.round(lamp.y) - 16, 5, 4);
+      c.fillStyle = index === 0 || sim.memory.lamps.includes(index) ? '#f1dfa2' : '#66604c'; c.fillRect(Math.round(lamp.x) - 2, Math.round(lamp.y) - 16, 5, 4);
       c.fillStyle = '#baaa69'; c.fillRect(Math.round(lamp.x) - 3, Math.round(lamp.y) - 13, 7, 1);
     } });
     for (const wreck of world.wrecks.filter(wreck => !wreck.rescued)) objects.push({ y: wreck.y, draw: () => {
@@ -268,15 +293,31 @@ export class Renderer {
       c.fillStyle = wreck.rescued ? '#a2ba87' : '#aaa6a0'; c.fillRect(x - 5, y - 7, 10, 13); c.fillRect(x - 6, y - 4, 12, 2); c.fillRect(x - 6, y + 3, 12, 2);
       c.fillStyle = '#373330'; c.fillRect(x - 3, y - 4, 6, 3);
       if (!wreck.rescued && Math.floor(sim.time * 3) % 2 === 0) { c.fillStyle = '#e3a967'; c.fillRect(x - 5, y - 8, 2, 1); c.fillRect(x + 3, y - 8, 2, 1); }
-      if (wreck.attached) { c.fillStyle = '#d4bd8c'; pixelLine(c, x, y, sim.car.x, sim.car.y); c.fillRect(x - 7, y - 13, 14, 1); c.fillRect(x - 7, y - 14, Math.round(wreck.progress / 100 * 14), 2); }
+      for (const id of wreck.helpers ?? []) { const helper = crew.find(s => s.actorId === id); if (helper) { c.fillStyle = '#98b9b1'; pixelLine(c, x, y, helper.car.x, helper.car.y); } }
+      if (wreck.attached) { const owner = crew.find(s => s.actorId === wreck.attachedTo) ?? sim; c.fillStyle = wreck.tension > .8 ? '#d58063' : '#d4bd8c'; pixelLine(c, x, y, owner.car.x, owner.car.y); c.fillRect(x - 7, y - 13, 14, 1); c.fillRect(x - 7, y - 14, Math.round(wreck.progress / 100 * 14), 2); }
     } });
-    objects.push({ y: sim.car.y, draw: () => {
+    for (const driver of crew) objects.push({ y: driver.car.y, draw: () => {
       c.globalAlpha = 1;
-      const frame = ((Math.round(sim.car.angle / (Math.PI * 2) * 32) % 32) + 32) % 32;
-      c.drawImage(this.cars[frame], Math.round(sim.car.x) - 10, Math.round(sim.car.y) - 10);
-      sim.cargo.slice(0, 3).forEach((item, i) => { c.fillStyle = CARGO[item.kind].color; c.fillRect(Math.round(sim.car.x) - 2 + i * 2, Math.round(sim.car.y) - 2, 1, 2); });
+      const frame = ((Math.round(driver.car.angle / (Math.PI * 2) * 32) % 32) + 32) % 32;
+      c.drawImage(this.cars[frame], Math.round(driver.car.x) - 10, Math.round(driver.car.y) - 10);
+      driver.cargo.slice(0, 3).forEach((item, i) => { c.fillStyle = CARGO[item.kind].color; c.fillRect(Math.round(driver.car.x) - 2 + i * 2, Math.round(driver.car.y) - 2, 1, 2); });
+      const ca = Math.cos(driver.car.angle), sa = Math.sin(driver.car.angle);
+      for (const side of [-1, 1]) { c.fillStyle = driver.headlights ? '#fff0bc' : '#aa9682'; c.fillRect(Math.round(driver.car.x + ca * 7 - sa * side * 3), Math.round(driver.car.y + sa * 7 + ca * side * 3), 2, 2); }
+      Object.entries(driver.campaign.progression.modules).forEach(([slot, id]) => {
+        const offset = slot === 'front' ? 10 : slot === 'rear' ? -9 : 0;
+        c.fillStyle = id === 'light' ? '#eadb9b' : id === 'scanner' ? '#a7c8c3' : '#ab9d83';
+        const mx = Math.round(driver.car.x + ca * offset), my = Math.round(driver.car.y + sa * offset);
+        c.fillRect(mx - 2, my - 2, slot === 'cargo' ? 5 : 3, slot === 'roof' ? 4 : 2);
+      });
     } });
-    if (!sim.driving) objects.push({ y: p.y, draw: () => this.drawPerson(sim) });
+    for (const driver of crew) if (!driver.driving) objects.push({ y: driver.player.y, draw: () => this.drawPerson(driver) });
+    const hunter = sim.expedition.hunter;
+    if (hunter.state !== 'dormant' && hunter.state !== 'warning') objects.push({ y: hunter.y, draw: () => {
+      c.globalAlpha = hunter.state === 'retreat' ? .25 : .75; c.fillStyle = '#3a303e';
+      const hx = Math.round(hunter.x), hy = Math.round(hunter.y), step = Math.floor(sim.time * 5) % 2;
+      c.fillRect(hx - 5, hy - 14, 11, 14); c.fillRect(hx - 7, hy - 8, 2, 11 + step * 3); c.fillRect(hx + 6, hy - 8, 2, 14 - step * 3);
+      c.fillStyle = '#cf987b'; c.fillRect(hx - 3, hy - 12, 2, 1); c.fillRect(hx + 2, hy - 12, 2, 1);
+    } });
     objects.sort((a, b) => a.y - b.y);
     for (const object of objects) object.draw();
     c.globalAlpha = 1;
@@ -286,7 +327,7 @@ export class Renderer {
       const x = Math.round(wisp.x), y = Math.round(wisp.y + (this.reducedMotion ? 0 : Math.sin(sim.time * 2 + wisp.phase) * 2));
       c.fillStyle = '#a5bb82'; c.fillRect(x, y - 3, 2, 6); c.fillRect(x - 2, y - 1, 6, 2);
     }
-    for (const ripple of sim.ripples) {
+    for (const driver of crew) for (const ripple of driver.ripples) {
       const progress = 1 - ripple.life / ripple.maxLife;
       const radius = ripple.radius * (1 - (1 - progress) ** 2), aspect = ripple.radius < 20 ? .5 : 1;
       c.fillStyle = ripple.color; c.globalAlpha = (1 - progress) * .7;
@@ -297,7 +338,7 @@ export class Renderer {
         c.fillRect(Math.round(ripple.x + Math.cos(a) * radius), Math.round(ripple.y + Math.sin(a) * radius * aspect), 1, 1);
       }
     }
-    for (const particle of sim.particles) {
+    for (const driver of crew) for (const particle of driver.particles) {
       c.globalAlpha = Math.ceil(particle.life / particle.maxLife * 4) / 4; c.fillStyle = particle.color;
       c.fillRect(Math.round(particle.x), Math.round(particle.y), particle.size, particle.size);
     }
@@ -305,6 +346,8 @@ export class Renderer {
       const to = sim.route[sim.route.length - 1]; c.globalAlpha = .6; c.fillStyle = '#c9c27d';
       c.fillRect(Math.round(to.x) - 3, Math.round(to.y), 7, 1); c.fillRect(Math.round(to.x), Math.round(to.y) - 3, 1, 7);
     }
+    c.fillStyle = '#f4dda1';
+    for (const [key, value] of lights) { const lp = lightPoint(key); if (lp.x < -ox || lp.y < -oy || lp.x > w - ox || lp.y > h - oy) continue; c.globalAlpha = value * (.14 + sim.night * .08); c.fillRect(lp.x, lp.y, 4, 4); }
     // The mask covers sprites and tracks too: every reveal edge stays on the tile grid.
     c.fillStyle = BG;
     for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
@@ -313,12 +356,16 @@ export class Renderer {
       c.globalAlpha = 1 - level; c.fillRect(x * TILE, y * TILE, TILE, TILE);
     }
     c.globalAlpha = 1;
+    for (const driver of this.peers) if (!driver.docked && Math.hypot(driver.car.x - p.x, driver.car.y - p.y) < radius * TILE + 36) this.label(driver.car.x, driver.car.y - 16, driver.displayName.slice(0, 10), '#a9d0c8');
+    for (const ping of this.pings) if (ping.ttl > 0) this.label(ping.x, ping.y - 12, ping.label, '#a9d0c8');
+    if (sim.nearRare) this.label(world.rare.x, world.rare.y - 40, '[E]', '#c5acd0');
     if (sim.nearbyCache && sim.driving) this.label(sim.nearbyCache.x, sim.nearbyCache.y - 20, '[E]', '#d7cb81');
     else if (!sim.driving && sim.nearbyCache) this.label(sim.nearbyCache.x, sim.nearbyCache.y - 20, '[E]', '#d7cb81');
     else if (!sim.driving && sim.nearCar) this.label(sim.car.x, sim.car.y - 19, '[E]', '#d7b1a7');
     if (!sim.driving && sim.nearbyLamp > 0) this.label(world.lamps[sim.nearbyLamp].x, world.lamps[sim.nearbyLamp].y - 27, '[E]', '#e5dca9');
     if (sim.returnReady && sim.atCamp && !sim.docked) this.label(world.camp.x, world.camp.y - 25, '[E]', '#d7cb81');
     c.restore(); c.globalAlpha = 1;
+    if (['warning','search','chase'].includes(hunter.state) && !sim.docked && !this.reducedMotion) { c.fillStyle='#a695aa'; c.globalAlpha=.08; for(let i=0;i<5;i++) { const y=(Math.floor(sim.time*13)+i*37)%h; c.fillRect((i*79+Math.floor(sim.time*7))%w,y,10+i*3,1); } c.globalAlpha=1; }
     this.drawBearing(sim, ox, oy);
     if (!this.reducedMotion && sim.storm > .1 && !sim.docked) {
       c.fillStyle = '#b5b3a2'; c.globalAlpha = sim.storm * .3;
@@ -331,8 +378,30 @@ export class Renderer {
   }
 
   private label(x: number, y: number, text: string, color: string): void {
-    const c = this.ctx; c.font = '10px Tiny5'; c.textAlign = 'center'; c.fillStyle = BG;
-    c.fillRect(Math.round(x) - 10, Math.round(y) - 8, 20, 11); c.fillStyle = color; c.fillText(text, Math.round(x), Math.round(y));
+    const key = color + text;
+    let sprite = this.labels.get(key);
+    if (!sprite) {
+      const { canvas, ctx } = surface(1, 12); ctx.font = '10px Tiny5';
+      canvas.width = Math.ceil(ctx.measureText(text).width) + 4; ctx.font = '10px Tiny5'; ctx.fillStyle = color; ctx.fillText(text, 2, 10);
+      sprite = canvas; if (this.labels.size > 100) this.labels.clear(); this.labels.set(key, sprite);
+    }
+    const left = Math.round(x) - Math.floor(sprite.width / 2), top = Math.round(y) - 10;
+    this.ctx.fillStyle = BG; this.ctx.fillRect(left, top, sprite.width, 12); this.ctx.drawImage(sprite, left, top);
+  }
+
+  private drawRare(sim: Simulation): void {
+    const c = this.ctx, x = Math.round(sim.world.rare.x), y = Math.round(sim.world.rare.y), region = sim.world.region;
+    c.globalAlpha = 1; c.fillStyle = '#51473c'; c.fillRect(x - 18, y - 15, 37, 22);
+    c.fillStyle = REGIONS[region].color;
+    if (region === 0) { pixelLine(c, x - 24, y - 25, x + 24, y - 25); pixelLine(c, x, y, x, y - 45); c.fillRect(x - 15, y - 13, 8, 7); }
+    else if (region === 1) { c.fillRect(x - 22, y - 20, 45, 3); c.fillStyle = '#6e9898'; for (let i = 0; i < 5; i++) c.fillRect(x - 24 + i * 10, y + 3 + Math.floor(sim.time * 2 + i) % 2, 7, 1); }
+    else if (region === 2) { pixelLine(c, x - 34, y - 35, x + 34, y - 27); c.fillRect(x - 10, y - 25, 20, 14); c.fillStyle = '#343b44'; c.fillRect(x - 7, y - 22, 14, 7); }
+    else if (region === 3) { for (const s of [-1, 1]) { c.fillRect(x + s * 18 - 5, y - 28, 11, 17); pixelLine(c, x + s * 18 - 8, y - 28, x + s * 18, y - 35); } }
+    else if (region === 4) { for (let i = -15; i < 16; i++) c.fillRect(x + i, y - 15 - Math.round(Math.sqrt(225 - i * i)), 1, 3); pixelLine(c, x, y - 23, x + 25, y - 37); }
+    else if (region === 5) { for (const s of [-1, 1]) pixelLine(c, x + s * 19, y + 5, x + s * 12, y - 38); for (let i = 0; i < 4; i++) c.fillRect(x - 12, y - 38 + i * 9, 25, 2); }
+    else { for (let i = 0; i < 7; i++) { const a = i / 7 * Math.PI * 2; pixelLine(c, x + Math.cos(a) * 22, y + Math.sin(a) * 12, x + Math.cos(a) * 10, y - 27); } }
+    c.fillStyle = sim.memory.rare ? '#acd19a' : '#e1c885'; c.fillRect(x - 2, y - 9, 5, 7);
+    if (sim.nearRare || sim.memory.rare && Math.hypot(sim.player.x - x, sim.player.y - y) < 60) { c.font = '8px Tiny5'; c.textAlign = 'center'; c.fillText(RARE_PLACES[region][0], x, y + 18); }
   }
 
   private drawPerson(sim: Simulation): void {
@@ -342,6 +411,7 @@ export class Renderer {
     c.fillStyle = '#e45f50'; c.fillRect(x - 2, y - 5, 5, 3);
     c.fillRect(x - 3 + stride, y - 4, 1, 2); c.fillRect(x + 3 - stride, y - 4, 1, 2);
     c.fillStyle = '#ddbaa2'; c.fillRect(x - 1 - stride, y - 2, 1, 2); c.fillRect(x + 1 + stride, y - 2, 1, 2);
+    if (sim.carried) { c.fillStyle = CARGO[sim.carried.kind].color; c.fillRect(x - 3, y - 5, 7, 5); c.fillStyle = '#eadcb6'; c.fillRect(x, y - 5, 1, 5); }
   }
 
   private drawBase(point: Point, ready: boolean, time: number): void {
@@ -361,6 +431,8 @@ export class Renderer {
     const targets: (Point & {car: boolean})[] = [];
     if (sim.returning || sim.full || sim.hull / sim.maxHull < .3) targets.push({ ...sim.world.camp, car: false });
     if (!sim.driving && !sim.nearCar) targets.push({ x: sim.car.x, y: sim.car.y, car: true });
+    if (sim.towing) targets.push({ ...sim.world.rescueZone, car: false });
+    if (sim.expedition.last.phase === 'accepted') targets.push({ ...sim.expedition.last, car: false });
     for (const target of targets) {
       const dx = target.x - sim.player.x, dy = target.y - sim.player.y, distance = Math.hypot(dx, dy);
       if (distance < 35) continue;
@@ -374,7 +446,7 @@ export class Renderer {
       pixelLine(c, x + Math.cos(angle + 2.4) * 3, y + Math.sin(angle + 2.4) * 3, tipX, tipY);
       pixelLine(c, x + Math.cos(angle - 2.4) * 3, y + Math.sin(angle - 2.4) * 3, tipX, tipY);
       if (sim.returning || sim.pulseTime > 0) {
-        c.font = '9px Tiny5'; c.textAlign = 'center'; c.fillText(target.car ? 'АВТО' : 'БАЗА', Math.round(x), Math.round(y + 13));
+        c.font = '9px Tiny5'; c.textAlign = 'center'; c.fillText(target.car ? 'АВТО' : target.x === sim.world.rescueZone.x ? 'ПОСТ' : target.x === sim.expedition.last.x ? 'СИГНАЛ' : 'БАЗА', Math.round(x), Math.round(y + 13));
       }
     }
     const signal = sim.signal;
@@ -413,6 +485,9 @@ export class Renderer {
     });
     c.strokeStyle = '#d3c786'; c.strokeRect(Math.round(sim.world.camp.x * scale) - 3, Math.round(sim.world.camp.y * scale) - 3, 6, 6);
     c.fillStyle = '#e74344'; c.fillRect(Math.round(sim.car.x * scale) - 2, Math.round(sim.car.y * scale) - 2, 4, 4);
+    const markers = [...sim.memory.drops.map(d => ({ ...d, label: '■', color: '#dfa878' })), ...(sim.memory.job && !sim.memory.job.taken ? [{ ...sim.memory.job, label: '■', color: '#8ac5bc' }] : []), { ...sim.world.rescueZone, label: '◆', color: '#b5cc96' }, ...(sim.memory.rareSeen ? [{ ...sim.world.rare, label: sim.memory.rare ? '✓' : '?', color: '#c5acd0' }] : []), ...this.peers.map(s => ({ ...s.player, label: '●', color: '#a9d0c8' }))];
+    c.font = '14px Tiny5'; c.textAlign = 'center';
+    for (const marker of markers) { c.fillStyle = marker.color; c.fillText(marker.label, Math.round(marker.x * scale), Math.round(marker.y * scale)); }
     if (!sim.driving) { c.fillStyle = '#e8cdbd'; c.fillRect(Math.round(sim.player.x * scale) - 1, Math.round(sim.player.y * scale) - 1, 3, 3); }
   }
 }
