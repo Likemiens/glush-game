@@ -16,3 +16,17 @@ jobs:
       - run: npm run build
       - run: npm run server:build
       - run: npm run cloudflare:check
+      - name: Build portable container
+        run: docker build -t glush-check .
+      - name: Verify five clients against the container
+        run: |
+          docker run --rm -d --name glush-check -p 127.0.0.1:18789:8787 glush-check
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:18789/health; then break; fi
+            sleep 1
+          done
+          curl --fail http://127.0.0.1:18789/
+          GLUSH_TEST_SERVER=http://127.0.0.1:18789 node --import tsx --test tests/transport.test.ts
+      - name: Stop test container
+        if: always()
+        run: docker stop glush-check || true
