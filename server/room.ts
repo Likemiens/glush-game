@@ -136,8 +136,10 @@ export class Room {
     this.share();
   }
   private newSimulation(p: PlayerState, world: World): Simulation {
+    const ongoing = [...this.players.values()].find(q => q.sim.world === world && !q.sim.docked)?.sim.expedition;
     const liveWrecks = world.wrecks.map(w => ({ ...w }));
     const sim = new Simulation(world, p.sim.campaign); sim.actorId = p.id; sim.headlights = p.sim.headlights;
+    if (ongoing) sim.expedition = ongoing;
     if (world === this.world && [...this.players.values()].some(q => q.sim.world === world && !q.sim.docked)) liveWrecks.forEach((w, i) => Object.assign(world.wrecks[i], w));
     return sim;
   }

@@ -157,6 +157,14 @@ test('Five players arbitrate one pickup, transfer cargo and share rewards exactl
   assert.equal(room.campaign.delivered, 1);
 });
 
+test('Individual returns never reset the active crew expedition, hunter or last signal', async () => {
+  const {players,command}=await crew();
+  const active=players[0].sim.expedition;
+  active.hunter.state='warning';active.hunter.timer=5;active.last.phase='accepted';active.last.ttl=90;
+  command(0,{type:'evacuate'});command(0,{type:'depart',region:0});
+  assert(players.every(p=>p.sim.expedition===active));assert.equal(active.hunter.timer,5);assert.equal(active.last.ttl,90);
+});
+
 test('Creator leaves, fifth player resumes after restart, cargo survives 30s grace and all-offline freezes', async () => {
   const { room, players, keys, invite, command } = await crew(); const first = players[0];
   await assert.rejects(() => room.join(makeKey(), invite, 'Sixth'), /пять/);
