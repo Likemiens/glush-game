@@ -1,10 +1,11 @@
+import { getLanguage } from '../i18n';
 import { CONTRACTS, MAX_LEVEL, REGIONS, UPGRADES, levelLimit, regionLock, upgradeLock } from '../game/campaign';
 import type { Campaign, UpgradeId } from '../game/campaign';
 import type { Simulation } from '../game/simulation';
 import { escapeText, moduleMarkup, radioMarkup, rulesMarkup } from './expedition';
 export type BaseView = 'dispatch' | 'workshop' | 'journal';
 export const escape = escapeText;
-const money = (n: number): string => n.toLocaleString('ru-RU');
+const money = (n: number): string => n.toLocaleString(getLanguage() === 'ru' ? 'ru-RU' : 'en-US');
 
 export function journalMarkup(c: Campaign): string {
   const completed = c.claimed.filter(Boolean).length;

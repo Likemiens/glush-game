@@ -10,7 +10,9 @@ The transmitters have gone quiet. Roads disappear after sunset. Your station has
 
 ### [▶ PLAY FREE IN YOUR BROWSER](https://glush.varantsov.ru/)
 
-Single player or online co-op for **up to 5 players** · Desktop and touch controls · Russian in-game text
+Single player or online co-op for **up to 5 players** · Desktop and touch controls · English and Russian
+
+English is the default. Choose your language on the title screen or in **Settings → Language**. It is saved in this browser independently of your campaign; friends in the same world can use different languages.
 
 ## About the Game
 

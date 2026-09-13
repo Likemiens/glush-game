@@ -1,4 +1,7 @@
 import './style.css';
+import { getLanguage, readLanguage, rememberLanguage, setLanguage, t } from './i18n';
+import type { Language } from './i18n';
+import { localize } from './i18n/dom';
 import { Input } from './game/input';
 import { Soundscape } from './game/audio';
 import { Renderer } from './game/renderer';
@@ -13,6 +16,8 @@ import type { Command } from './game/commands';
 import { cells as shapeCells } from './game/inventory';
 import { CoopClient, createRoom, identityFor, invitation, parseInvitation, saveIdentity } from './net/client';
 import type { Identity, RoomLink } from './net/client';
+
+try { setLanguage(readLanguage(localStorage)); } catch { setLanguage('en'); }
 
 const $ = <T extends HTMLElement>(selector: string): T => { const el = document.querySelector<T>(selector); if (!el) throw new Error(`Missing ${selector}`); return el; };
 const timeString = (seconds: number): string => `${Math.floor(Math.ceil(seconds) / 60).toString().padStart(2, '0')}:${(Math.ceil(seconds) % 60).toString().padStart(2, '0')}`;
@@ -29,7 +34,7 @@ $('#app').innerHTML = `
     <div class="field-controls"><div class="movement-hint">WASD <span>руль</span> · SPACE <span>газ</span></div><button id="action-button" class="action"><kbd>E</kbd><span id="action-hint">Выйти</span></button><button id="scan-button"><kbd>Q</kbd><span>Сканер</span></button><button id="careful-button" aria-pressed="false"><span>Тихий ход</span></button><button id="home-button"><kbd>B</kbd><span>На базу</span></button><button id="map-button"><kbd>M</kbd><span>Карта</span></button><button id="pause-button" aria-label="Меню"><span>Меню</span></button></div>
     <div class="touch-controls"><div id="joystick" class="stick" aria-label="Джойстик"><i class="stick-knob"></i></div><button id="touch-boost" aria-label="Ускорение"><span>↑↑</span><small id="move-hint">Газ</small></button></div>
   </div>
-  <div id="welcome"><div class="welcome-mark">□ · □ · □</div><h1>ГЛУШЬ</h1><p>Найди. Довези. Верни свет.</p><button id="start-button" class="pixel-button">На станцию →</button></div>
+  <div id="welcome"><div class="welcome-mark">□ · □ · □</div><h1>ГЛУШЬ</h1><p>Найди. Довези. Верни свет.</p><button id="start-button" class="pixel-button">На станцию →</button><label class="language-picker" for="welcome-language"><span translate="no">Language / Язык</span><select id="welcome-language" translate="no"><option value="en">English</option><option value="ru">Русский</option></select></label></div>
   <div id="toast" role="status" aria-live="polite"></div><output id="game-state" aria-hidden="true" class="sr-only"></output>
   <dialog id="panel" aria-labelledby="panel-title"><button id="close-panel" aria-label="Закрыть">×</button><div id="panel-content"></div></dialog>`;
 
@@ -70,7 +75,7 @@ function run(command: Command): void {
 }
 
 function toast(text: string, duration = 3500): void {
-  $('#toast').textContent = text; $('#toast').classList.add('visible'); clearTimeout(toastTimer);
+  $('#toast').textContent = text; localize($('#toast')); $('#toast').classList.add('visible'); clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { $('#toast').classList.remove('visible'); $('#toast').textContent = ''; }, duration);
 }
 function persist(): void { if (coop) return; if (!saveGame(sim) && !saveWarning) { saveWarning = true; toast('Сохранение недоступно'); } }
@@ -111,7 +116,7 @@ function openPanel(type: string): void {
     if (coop) content.insertAdjacentHTML('afterbegin', `<p id="coop-status">◉ ${coop.state === 'online' ? `На связи ${coop.actors.filter(a => a.online).length}/5` : 'Восстанавливаю связь…'}${coop.actors.some(a => a.ready !== null) ? ' · команда собирается на выезд' : ''}</p>`);
   } else if (type === 'coop') {
     if (coop) {
-      content.innerHTML = `<h2 id="panel-title">Общий мир</h2><p id="coop-status">${coop.state === 'online' ? '◉ На связи' : '◌ Восстанавливаю соединение…'}</p><div class="crew-list">${coop.actors.map(a => `<div class="crew-member"><span>${escapeText(a.name)}</span><span>${a.ready !== null ? 'Готов' : a.online ? a.trip.docked ? 'На станции' : 'На маршруте' : 'Нет связи'}</span></div>`).join('')}</div><button id="copy-invite" class="pixel-button">Скопировать приглашение</button><div class="coop-actions">${['Нужна помощь', 'Нашёл груз', 'Возвращаюсь', 'Сюда', 'Зацепить трос', 'Отцепить трос'].map(label => `<button data-ping="${label}">${label}</button>`).join('')}<button id="export-world">Скачать мир</button><button id="export-key">Скачать личный ключ</button></div><p class="base-note">Ключ нужен для входа с другого устройства. Друзьям отправляй приглашение.</p><button id="leave-coop" class="quiet-button">Вернуться в одиночную игру</button><button id="resume" class="pixel-button">В игру →</button>`;
+      content.innerHTML = `<h2 id="panel-title">Общий мир</h2><p id="coop-status">${coop.state === 'online' ? '◉ На связи' : '◌ Восстанавливаю соединение…'}</p><div class="crew-list">${coop.actors.map(a => `<div class="crew-member"><span translate="no">${escapeText(a.name)}</span><span>${a.ready !== null ? 'Готов' : a.online ? a.trip.docked ? 'На станции' : 'На маршруте' : 'Нет связи'}</span></div>`).join('')}</div><button id="copy-invite" class="pixel-button">Скопировать приглашение</button><div class="coop-actions">${['Нужна помощь', 'Нашёл груз', 'Возвращаюсь', 'Сюда', 'Зацепить трос', 'Отцепить трос'].map(label => `<button data-ping="${label}">${label}</button>`).join('')}<button id="export-world">Скачать мир</button><button id="export-key">Скачать личный ключ</button></div><p class="base-note">Ключ нужен для входа с другого устройства. Друзьям отправляй приглашение.</p><button id="leave-coop" class="quiet-button">Вернуться в одиночную игру</button><button id="resume" class="pixel-button">В игру →</button>`;
       $('#copy-invite').onclick = () => { if (coop) void navigator.clipboard.writeText(invitation(coop.link)).then(() => toast('Приглашение скопировано')).catch(() => { toast(invitation(coop!.link), 15000); }); };
       $('#export-key').onclick = () => { if (coop) download('glush-player-key.json', coop.identity); };
       $('#export-world').onclick = () => { if (coop) void coop.exportWorld().then(data => download('glush-world.json', data)).catch(e => toast(String(e))); };
@@ -169,14 +174,15 @@ function openPanel(type: string): void {
     content.innerHTML = '<h2 id="panel-title">Вызвать помощь?</h2><p class="story">Рейс закончится. Груз останется на карте — за ним можно вернуться. Купленные улучшения, открытия и восстановленный свет сохранятся.</p><button id="confirm-evacuate" class="pixel-button">Эвакуироваться</button><button id="resume" class="quiet-button">Остаться</button>';
     $('#confirm-evacuate').onclick = () => { run({ type: 'evacuate' }); baseView = 'dispatch'; if (!coop) { sim.events = []; openPanel('base'); } }; $('#resume').onclick = closePanel;
   } else if (type === 'settings') {
-    content.innerHTML = `<h2 id="panel-title">Настройки</h2><button id="sound-button" class="setting-toggle" aria-pressed="${settings.sound}">Звук <span>${settings.sound ? 'включён' : 'выключен'}</span></button><div class="settings"><label for="music-volume">Музыка <output id="music-value">${Math.round(settings.music * 100)}%</output></label><input id="music-volume" type="range" min="0" max="100" value="${Math.round(settings.music * 100)}"><label for="effects-volume">Мир и эффекты <output id="effects-value">${Math.round(settings.effects * 100)}%</output></label><input id="effects-volume" type="range" min="0" max="100" value="${Math.round(settings.effects * 100)}"><label for="zoom">Масштаб <select id="zoom">${[2, 3, 4].map(z => `<option value="${z}" ${settings.zoom === z ? 'selected' : ''}>${z}×</option>`).join('')}</select></label><label class="motion-setting"><input type="checkbox" id="motion" ${settings.reducedMotion ? 'checked' : ''}> Меньше движения</label></div><div class="music-credit"><span>Сейчас в эфире</span><a href="https://www.scottbuckley.com.au/library/machina/" target="_blank" rel="noopener">Machina — Scott Buckley ↗</a><small>Адаптировано для игры · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></small><button id="retry-music">Включить музыку</button></div><button id="resume" class="pixel-button">Готово →</button>`;
+    content.innerHTML = `<h2 id="panel-title">Настройки</h2><label class="language-picker settings-language" for="language-select"><span>Язык</span><select id="language-select" translate="no"><option value="en" ${getLanguage() === 'en' ? 'selected' : ''}>English</option><option value="ru" ${getLanguage() === 'ru' ? 'selected' : ''}>Русский</option></select></label><button id="sound-button" class="setting-toggle" aria-pressed="${settings.sound}">Звук <span>${settings.sound ? 'включён' : 'выключен'}</span></button><div class="settings"><label for="music-volume">Музыка <output id="music-value">${Math.round(settings.music * 100)}%</output></label><input id="music-volume" type="range" min="0" max="100" value="${Math.round(settings.music * 100)}"><label for="effects-volume">Мир и эффекты <output id="effects-value">${Math.round(settings.effects * 100)}%</output></label><input id="effects-volume" type="range" min="0" max="100" value="${Math.round(settings.effects * 100)}"><label for="zoom">Масштаб <select id="zoom">${[2, 3, 4].map(z => `<option value="${z}" ${settings.zoom === z ? 'selected' : ''}>${z}×</option>`).join('')}</select></label><label class="motion-setting"><input type="checkbox" id="motion" ${settings.reducedMotion ? 'checked' : ''}> Меньше движения</label></div><div class="music-credit"><span>Сейчас в эфире</span><a href="https://www.scottbuckley.com.au/library/machina/" target="_blank" rel="noopener">Machina — Scott Buckley ↗</a><small>Адаптировано для игры · <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noopener">CC BY 4.0</a></small><button id="retry-music">Включить музыку</button></div><button id="resume" class="pixel-button">Готово →</button>`;
     $('#resume').onclick = closePanel;
-    $('#sound-button').onclick = () => { settings.sound = sound.enabled = !sound.enabled; sound.syncVolume(); if (sound.enabled) void sound.start(); storeSettings(settings); $('#sound-button').innerHTML = `Звук <span>${settings.sound ? 'включён' : 'выключен'}</span>`; $('#sound-button').setAttribute('aria-pressed', String(settings.sound)); };
+    $('#sound-button').onclick = () => { settings.sound = sound.enabled = !sound.enabled; sound.syncVolume(); if (sound.enabled) void sound.start(); storeSettings(settings); $('#sound-button').innerHTML = `Звук <span>${settings.sound ? 'включён' : 'выключен'}</span>`; $('#sound-button').setAttribute('aria-pressed', String(settings.sound)); localize($('#sound-button')); };
     for (const kind of ['music', 'effects'] as const) $<HTMLInputElement>(`#${kind}-volume`).oninput = e => {
       settings[kind] = Number((e.target as HTMLInputElement).value) / 100; sound.musicVolume = settings.music; sound.volume = settings.effects;
       sound.syncVolume(); if (kind === 'music' && settings.sound) void sound.start(); storeSettings(settings); $(`#${kind}-value`).textContent = Math.round(settings[kind] * 100) + '%';
     };
     $('#retry-music').onclick = () => { settings.sound = sound.enabled = true; if (!settings.music) settings.music = sound.musicVolume = .55; storeSettings(settings); void sound.start(); openPanel('settings'); };
+    $<HTMLSelectElement>('#language-select').onchange = e => { applyLanguage((e.target as HTMLSelectElement).value as Language); $('#language-select').focus(); };
     $<HTMLSelectElement>('#zoom').onchange = e => { renderer.zoom = settings.zoom = Number((e.target as HTMLSelectElement).value); renderer.resize(); storeSettings(settings); };
     $<HTMLInputElement>('#motion').onchange = e => { renderer.reducedMotion = settings.reducedMotion = (e.target as HTMLInputElement).checked; storeSettings(settings); };
   } else {
@@ -186,10 +192,18 @@ function openPanel(type: string): void {
   if (type !== 'inventory') content.onkeydown = null;
   if (type === 'pause') { content.insertAdjacentHTML('beforeend', '<div class="pause-grid"><button id="pause-trunk">Багажник</button><button id="pause-coop">Друзья и радио</button></div>'); $('#pause-trunk').onclick = () => openPanel('inventory'); $('#pause-coop').onclick = () => openPanel('coop'); }
   panel.classList.toggle('inventory-panel', type === 'inventory');
-  bindFeatureButtons(content, run);
+  bindFeatureButtons(content, run); localize(panel);
   if (!panel.open) panel.showModal();
   if (type === 'inventory' && selectedCargo >= 0) content.querySelector<HTMLButtonElement>(`[data-item="${selectedCargo}"]`)?.focus({ preventScroll: true });
   panel.scrollTop = previousType === type ? scroll : 0; updateHud();
+}
+function applyLanguage(value: Language): void {
+  try { rememberLanguage(localStorage, value); } catch { setLanguage(value); }
+  document.documentElement.lang = value; document.title = t('ГЛУШЬ — верни свет');
+  $<HTMLSelectElement>('#welcome-language').value = value;
+  localize($('#app'));
+  if (panel.open) openPanel(panelType);
+  updateHud();
 }
 function updateHud(): void {
   const slots = sim.cargo.flatMap(item => shapeCells(item.kind).map(() => item));
@@ -217,10 +231,12 @@ function updateHud(): void {
   const threat = ['warning','search','chase'].includes(sim.expedition.hunter.state);
   $('#weather').hidden = sim.storm < .15 && sim.exposure < 10 && sim.night === 0 && !threat;
   $('#weather-label').textContent = threat ? 'Помехи · тише' : sim.sheltered() ? 'Укрытие' : sim.storm > .3 ? 'Буря' : sim.night > 0 ? 'Темнота' : 'Туман'; $('#exposure').style.width = `${Math.max(3, sim.exposure)}%`;
+  localize($('#hud'));
   Object.assign($('#game-state').dataset, { seed: sim.world.seed, region: String(sim.world.region), day: String(sim.campaign.day), x: sim.player.x.toFixed(2), y: sim.player.y.toFixed(2),
     driving: String(sim.driving), cargo: String(sim.cargo.length), slots: String(sim.usedSlots), full: String(sim.full), credits: String(sim.campaign.credits), research: String(sim.campaign.research), hull: sim.hull.toFixed(2), exposure: sim.exposure.toFixed(2),
     remaining: sim.remaining.toFixed(2), tracks: String(sim.tracks.length), particles: String(sim.particles.length), paused: String(paused), docked: String(sim.docked), playing: String(playing), rescued: String(sim.rescued), patrol: String(sim.checkedLamps.length), upgrades: JSON.stringify(sim.campaign.upgrades) });
 }
+$('#welcome-language').onchange = e => applyLanguage((e.target as HTMLSelectElement).value as Language);
 $('#start-button').textContent = sim.docked ? 'На станцию →' : 'Продолжить →'; $('#start-button').onclick = start;
 $('#pause-button').onclick = () => openPanel('pause'); $('#map-button').onclick = () => openPanel('map'); $('#close-panel').onclick = closePanel;
 $('#trunk-button').onclick = () => openPanel('inventory'); $('#radio-button').onclick = () => openPanel('journal'); $('#last-banner').onclick = () => openPanel('journal'); $('#lights-button').onclick = () => run({ type: 'lights' });
@@ -257,6 +273,6 @@ function frame(now: number): void {
   sound.updateScene(sim); renderer.render(sim, dt); hudTimer += dt; if (hudTimer > .12) { hudTimer = 0; updateHud(); }
   requestAnimationFrame(frame);
 }
-updateHud(); requestAnimationFrame(frame); void document.fonts.load('12px Tiny5');
+applyLanguage(getLanguage()); requestAnimationFrame(frame); void document.fonts.load('12px Tiny5');
 if (import.meta.env.DEV) Object.defineProperty(window, '__glush', { value: { get sim() { return sim; }, setSim(value: typeof sim) { sim = value; renderer.reset(sim); updateHud(); }, get coop() { return coop; }, openPanel, run, start } });
 if (coopInvite) { playing = true; $('#welcome').hidden = true; openPanel('coop'); }

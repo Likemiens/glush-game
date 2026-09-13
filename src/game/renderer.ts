@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { SIZE, Terrain, TILE, WORLD_SIZE } from './world';
 import type { Point } from './world';
 import type { Simulation, Track } from './simulation';
@@ -357,7 +358,7 @@ export class Renderer {
     }
     c.globalAlpha = 1;
     for (const driver of this.peers) if (!driver.docked && Math.hypot(driver.car.x - p.x, driver.car.y - p.y) < radius * TILE + 36) this.label(driver.car.x, driver.car.y - 16, driver.displayName.slice(0, 10), '#a9d0c8');
-    for (const ping of this.pings) if (ping.ttl > 0) this.label(ping.x, ping.y - 12, ping.label, '#a9d0c8');
+    for (const ping of this.pings) if (ping.ttl > 0) this.label(ping.x, ping.y - 12, t(ping.label), '#a9d0c8');
     if (sim.nearRare) this.label(world.rare.x, world.rare.y - 40, '[E]', '#c5acd0');
     if (sim.nearbyCache && sim.driving) this.label(sim.nearbyCache.x, sim.nearbyCache.y - 20, '[E]', '#d7cb81');
     else if (!sim.driving && sim.nearbyCache) this.label(sim.nearbyCache.x, sim.nearbyCache.y - 20, '[E]', '#d7cb81');
@@ -401,7 +402,7 @@ export class Renderer {
     else if (region === 5) { for (const s of [-1, 1]) pixelLine(c, x + s * 19, y + 5, x + s * 12, y - 38); for (let i = 0; i < 4; i++) c.fillRect(x - 12, y - 38 + i * 9, 25, 2); }
     else { for (let i = 0; i < 7; i++) { const a = i / 7 * Math.PI * 2; pixelLine(c, x + Math.cos(a) * 22, y + Math.sin(a) * 12, x + Math.cos(a) * 10, y - 27); } }
     c.fillStyle = sim.memory.rare ? '#acd19a' : '#e1c885'; c.fillRect(x - 2, y - 9, 5, 7);
-    if (sim.nearRare || sim.memory.rare && Math.hypot(sim.player.x - x, sim.player.y - y) < 60) { c.font = '8px Tiny5'; c.textAlign = 'center'; c.fillText(RARE_PLACES[region][0], x, y + 18); }
+    if (sim.nearRare || sim.memory.rare && Math.hypot(sim.player.x - x, sim.player.y - y) < 60) { c.font = '8px Tiny5'; c.textAlign = 'center'; c.fillText(t(RARE_PLACES[region][0]), x, y + 18); }
   }
 
   private drawPerson(sim: Simulation): void {
@@ -446,7 +447,7 @@ export class Renderer {
       pixelLine(c, x + Math.cos(angle + 2.4) * 3, y + Math.sin(angle + 2.4) * 3, tipX, tipY);
       pixelLine(c, x + Math.cos(angle - 2.4) * 3, y + Math.sin(angle - 2.4) * 3, tipX, tipY);
       if (sim.returning || sim.pulseTime > 0) {
-        c.font = '9px Tiny5'; c.textAlign = 'center'; c.fillText(target.car ? 'АВТО' : target.x === sim.world.rescueZone.x ? 'ПОСТ' : target.x === sim.expedition.last.x ? 'СИГНАЛ' : 'БАЗА', Math.round(x), Math.round(y + 13));
+        c.font = '9px Tiny5'; c.textAlign = 'center'; c.fillText(t(target.car ? 'АВТО' : target.x === sim.world.rescueZone.x ? 'ПОСТ' : target.x === sim.expedition.last.x ? 'СИГНАЛ' : 'БАЗА'), Math.round(x), Math.round(y + 13));
       }
     }
     const signal = sim.signal;

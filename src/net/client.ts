@@ -1,3 +1,4 @@
+import { t } from '../i18n';
 import { Simulation } from '../game/simulation';
 import type { Controls, GameEvent } from '../game/simulation';
 import type { Campaign } from '../game/campaign';
@@ -15,7 +16,7 @@ export function serverAddress(value: string): string {
 export function identityFor(server: string): Identity {
   const address = serverAddress(server), saved = localStorage.getItem('glush:identity:' + address);
   if (saved) { const value = JSON.parse(saved) as Identity; if (/^[a-f0-9]{64}$/.test(value.key)) return value; }
-  const identity = { server: address, key: makeKey(), name: 'Водитель' }; saveIdentity(identity); return identity;
+  const identity = { server: address, key: makeKey(), name: t('Водитель') }; saveIdentity(identity); return identity;
 }
 export function saveIdentity(identity: Identity): void {
   if (!/^[a-f0-9]{64}$/.test(identity.key) || !identity.name.trim() || identity.name.length > 24) throw new Error('Неверный файл ключа.');
