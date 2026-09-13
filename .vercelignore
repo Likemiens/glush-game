@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.vercel/
+.git/
+.env*
+.data/
+.wrangler/
+server-dist/
+test-results/
+.preview*.png
+.coop-preview.png
+.DS_Store
