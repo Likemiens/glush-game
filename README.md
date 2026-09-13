@@ -8,7 +8,7 @@
 
 The transmitters have gone quiet. Roads disappear after sunset. Your station has enough light for one more departure. Follow a signal, carry something worth saving, and decide whether that last voice in the static is worth the detour.
 
-### [▶ PLAY FREE IN YOUR BROWSER](https://glush-game.vercel.app/)
+### [▶ PLAY FREE IN YOUR BROWSER](https://glush.varantsov.ru/)
 
 Single player or online co-op for **up to 5 players** · Desktop and touch controls · Russian in-game text
 
