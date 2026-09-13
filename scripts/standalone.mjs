@@ -1,11 +1,13 @@
-import { readFile, readdir, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { build } from 'vite';
 
 const root = resolve(import.meta.dirname, '..');
-const files = await readdir(resolve(root, 'dist/assets'));
-let html = await readFile(resolve(root, 'dist/index.html'), 'utf8');
-let css = await readFile(resolve(root, 'dist/assets', files.find(file => file.endsWith('.css'))), 'utf8');
-let js = await readFile(resolve(root, 'dist/assets', files.find(file => file.endsWith('.js'))), 'utf8');
+const bundle = await build({ configFile: false, root, build: { write: false, rollupOptions: { input: resolve(root, 'index.html'), output: { inlineDynamicImports: true } } } });
+const files = bundle.output;
+let html = String(files.find(file => file.fileName === 'index.html').source);
+let css = String(files.find(file => file.fileName.endsWith('.css')).source);
+let js = files.find(file => file.type === 'chunk' && file.isEntry).code;
 const music = await readFile(resolve(root, 'public/audio/machina-game.mp3'));
 js = js.replaceAll('/audio/machina-game.mp3', `data:audio/mpeg;base64,${music.toString('base64')}`);
 for (const font of ['tiny5']) {

@@ -11,7 +11,7 @@ npm run server:build
 npm run server:start
 ```
 
-Open `http://127.0.0.1:8787`. This server serves both the client and rooms, and automatically points its client to itself. SQLite lives in `.data/worlds.sqlite`. In a second terminal, `npm run dev` can run the development client. Add its origin to `ALLOWED_ORIGINS` when using a port other than the defaults.
+Open `http://127.0.0.1:8787` for solo play. The separate `/playtest/` entry serves co-op and automatically points to this Node server. When no test hash is configured locally, open `/playtest/#test=local` to enter; production Cloudflare always requires a real key. SQLite lives in `.data/worlds.sqlite`. In a second terminal, `npm run dev` can run the development client. Add its origin to `ALLOWED_ORIGINS` when using a port other than the defaults.
 
 Configuration:
 
@@ -22,6 +22,7 @@ Configuration:
 | `GLUSH_DATA_DIR` | `.data` | Persistent SQLite directory |
 | `ALLOWED_ORIGINS` | Local test origins and public Vercel game | Comma-separated browser origins |
 | `PUBLIC_SERVER_URL` | Current request host | Explicit HTTPS address behind a reverse proxy |
+| `GLUSH_TEST_KEY_HASH` | Unset (Node only) | SHA-256 of the private test key; configure this before exposing a private server |
 
 For public use, put the server behind an HTTPS reverse proxy that supports WebSocket upgrades, set `PUBLIC_SERVER_URL`, and allow your exact client origin. Keep the data directory on a persistent disk. Stop the server before copying its SQLite files, or use SQLite's backup tooling.
 
@@ -42,6 +43,16 @@ npm run cloudflare:deploy
 ```
 
 `wrangler.jsonc` defines the `WorldRoom` and `CreateGate` SQLite Durable Objects. Set `ALLOWED_ORIGINS` to your Vercel domain and required development origins. Put the resulting Worker HTTPS URL in `public/multiplayer.json` and deploy the Vite client to Vercel, with build command `npm run build` and output directory `dist`.
+
+### Private playtest access
+
+The public game is solo. The `/playtest/` page is a separate entry with `noindex`; hiding its URL is not the access control. Cloudflare requires a secret `GLUSH_TEST_KEY_HASH` before it looks up any room, starts a WebSocket or creates a world. If the secret is missing, access stays closed.
+
+Generate a cryptographically random 32-byte lowercase hex key locally. Store its SHA-256 hash with `npx wrangler secret put GLUSH_TEST_KEY_HASH`; never use a `VITE_` variable or commit the key. The private launch link is `https://YOUR-CLIENT/playtest/#server=ENCODED-SERVER-ORIGIN&test=SECRET-KEY`. URL fragments are not sent in the page request. The client supplies access separately in `X-Glush-Test-Key` HTTP headers and the WebSocket subprotocol. Room invitations generated inside the playtest carry the test access too; share them only with testers.
+
+The maintainer helper `node scripts/playtest-access.mjs` creates a key once and writes a private launch page and browser shortcut into ignored `test-results/private-playtest/`. Its local record lives in ignored `.data/private-playtest.json`. Upload only the hash with `node scripts/playtest-access.mjs --hash | npx wrangler secret put GLUSH_TEST_KEY_HASH`. To rotate deliberately, add `--rotate --hash` to that command and redistribute the new links. Never publish those generated files or the `.data` directory.
+
+Old room invitations still identify the same worlds. Enter via the private launch link first, then resume the last room or paste an old invitation. Player keys, purchases and worlds are unchanged. To revoke shared access, replace the hash and issue new private links. A Worker deployment closes current connections; after a key rotation old links cannot reconnect. No world deletion is needed. Rejected requests consume ordinary Worker requests but never start a room simulation.
 
 The configuration does not enable paid products. Durable Objects with SQLite are available on the Workers Free plan, with account-wide request, duration and storage limits. Check the current [pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/) and [limits](https://developers.cloudflare.com/durable-objects/platform/limits/) for the account running your server. Connected rooms use a regular WebSocket simulation loop; they do not hibernate while players are connected. With everyone offline, the simulation stops immediately.
 

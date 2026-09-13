@@ -3,7 +3,8 @@ import { Room } from './room';
 import type { WorldState } from './room';
 import { RoomRuntime } from './runtime';
 import { createWorldSchema, hashKey, makeKey } from '../src/net/protocol';
-interface Env { ROOMS: DurableObjectNamespace<WorldRoom>; GATE: DurableObjectNamespace<CreateGate>; ALLOWED_ORIGINS: string }
+import { ACCESS_ERROR, hasTestAccess } from './access';
+interface Env { ROOMS: DurableObjectNamespace<WorldRoom>; GATE: DurableObjectNamespace<CreateGate>; ALLOWED_ORIGINS: string; GLUSH_TEST_KEY_HASH?: string }
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 export class WorldRoom extends DurableObject<Env> {
   private runtime: RoomRuntime | undefined;
@@ -50,7 +51,8 @@ export class WorldRoom extends DurableObject<Env> {
     server.addEventListener('message', event => { if (Date.now() - started > 1000) { messages = 0; started = Date.now(); } if (++messages > 60) { server.close(1008, 'Rate limit'); return; } if (typeof event.data === 'string') void run.message(peer, event.data).catch(() => server.close(1011)); });
     server.addEventListener('close', () => { clearTimeout(auth); void run.disconnect(peer).catch(() => {}); });
     server.addEventListener('error', () => { server.close(1011); });
-    return new Response(null, { status: 101, webSocket: client });
+    const headers = request.headers.get('Sec-WebSocket-Protocol')?.split(',').some(p => p.trim() === 'glush') ? { 'Sec-WebSocket-Protocol': 'glush' } : undefined;
+    return new Response(null, { status: 101, webSocket: client, headers });
   }
 }
 export class CreateGate extends DurableObject<Env> {
@@ -71,12 +73,14 @@ export default {
     const cors = (response: Response): Response => {
       if (response.status === 101) return response;
       const r = new Response(response.body, response); if (origin) r.headers.set('Access-Control-Allow-Origin', origin);
-      r.headers.set('Vary', 'Origin'); r.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization'); r.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'); return r;
+      r.headers.set('Vary', 'Origin'); r.headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Glush-Test-Key'); r.headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS'); return r;
     };
     if (request.method === 'OPTIONS') return cors(new Response(null, { status: 204 }));
     try {
       const url = new URL(request.url);
       if (url.pathname === '/health') return cors(json({ ok: true, protocol: 1 }));
+      if (!await hasTestAccess(request.headers, env.GLUSH_TEST_KEY_HASH)) return cors(json({ error: ACCESS_ERROR }, 401));
+      if (url.pathname === '/access' && request.method === 'GET') return cors(json({ ok: true }));
       if (url.pathname === '/worlds' && request.method === 'POST') {
         const body = await request.text(); if (body.length > 4096) return cors(json({ error: 'Request too large' }, 413));
         const data = createWorldSchema.parse(JSON.parse(body));

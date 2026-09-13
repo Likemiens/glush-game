@@ -6,19 +6,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { once } from 'node:events';
 import WebSocket from 'ws';
-import { makeKey, type ActorFrame, type ServerMessage } from '../src/net/protocol';
+import { hashKey, makeKey, type ActorFrame, type ServerMessage } from '../src/net/protocol';
 import type { Command } from '../src/game/commands';
 import { World } from '../src/game/world';
 import type { WorldState } from '../server/room';
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+const testAccess = process.env.GLUSH_TEST_ACCESS ?? makeKey();
+const accessHeaders = { 'X-Glush-Test-Key': testAccess };
 async function until(check: () => boolean, timeout = 8000): Promise<void> {
   const start = Date.now(); while (!check()) { if (Date.now() - start > timeout) throw Error('Timed out waiting for game state'); await delay(25); }
 }
 class Driver {
   socket: WebSocket; id = ''; frame?: ActorFrame; seq = 0; operation = 0; errors: string[] = []; acks = new Set<string>();
   constructor(server: string, room: string, key: string, invite?: string, name = 'Test driver') {
-    this.socket = new WebSocket(server.replace('http:', 'ws:') + `/worlds/${room}/socket`);
+    this.socket = new WebSocket(server.replace(/^http/, 'ws') + `/worlds/${room}/socket`, ['glush', 'glush-test.' + testAccess]);
     this.socket.on('open', () => this.socket.send(JSON.stringify({ type: 'hello', version: 1, key, invite, name })));
     this.socket.on('message', text => {
       const m = JSON.parse(text.toString()) as ServerMessage;
@@ -45,7 +47,7 @@ const external = process.env.GLUSH_TEST_SERVER;
 test(external ? 'Five real clients complete a delivery on the Cloudflare adapter' : 'Five real WebSocket clients complete a delivery; reconnect, process restart and SQLite import retain it', { timeout: 90000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), 'glush-network-')), port = 18879, server = external ?? `http://127.0.0.1:${port}`;
   let process: ChildProcess | undefined, clients: Driver[] = [], output = '';
-  const env = { ...globalThis.process.env, PORT: String(port), GLUSH_DATA_DIR: directory, GLUSH_TEST_MODE: '1' };
+  const env = { ...globalThis.process.env, PORT: String(port), GLUSH_DATA_DIR: directory, GLUSH_TEST_MODE: '1', GLUSH_TEST_KEY_HASH: await hashKey(testAccess) };
   async function start(dataDir = directory) {
     if (external) return;
     output = ''; process = spawn(globalThis.process.execPath, ['--import', 'tsx', 'server/node.ts'], { cwd: globalThis.process.cwd(), env: { ...env, GLUSH_DATA_DIR: dataDir }, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -55,8 +57,20 @@ test(external ? 'Five real clients complete a delivery on the Cloudflare adapter
   async function stop() { if (!process || process.exitCode !== null) return; const exited = once(process, 'exit'); process.kill('SIGTERM'); await exited; }
   try {
     await start();
+    assert.equal((await fetch(server + '/access')).status, 401);
+    assert.equal((await fetch(server + '/access', { headers: accessHeaders })).status, 200);
+    assert.equal((await fetch(server + '/worlds', { method: 'POST', body: '{}' })).status, 401);
+    const unknown = crypto.randomUUID();
+    assert.equal((await fetch(`${server}/worlds/${unknown}/export`)).status, 401, 'Unauthorized requests do not look up rooms');
+    await new Promise<void>((resolve, reject) => {
+      const socket = new WebSocket(server.replace(/^http/, 'ws') + `/worlds/${unknown}/socket`);
+      const timeout = setTimeout(() => { socket.terminate(); reject(Error('Unauthorized socket was not rejected')); }, 5000);
+      socket.on('open', () => { clearTimeout(timeout); socket.terminate(); reject(Error('Unauthorized socket opened')); });
+      socket.on('unexpected-response', (_req, response) => { clearTimeout(timeout); response.resume(); socket.terminate(); try { assert.equal(response.statusCode, 401); resolve(); } catch (e) { reject(e); } });
+      socket.on('error', () => {});
+    });
     const keys = Array.from({ length: 5 }, () => makeKey());
-    const response = await fetch(server + '/worlds', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: keys[0], name: 'Ada', seed: 'MOSS-0842' }) });
+    const response = await fetch(server + '/worlds', { method: 'POST', headers: { 'Content-Type': 'application/json', ...accessHeaders }, body: JSON.stringify({ key: keys[0], name: 'Ada', seed: 'MOSS-0842' }) });
     assert(response.ok); const { id, invite } = await response.json() as { id: string; invite: string };
     clients = keys.map((key, i) => new Driver(server, id, key, invite, ['Ada', 'Lev', 'Mira', 'Yuki', 'Nika'][i]));
     await until(() => clients.every(c => !!c.frame));
@@ -72,9 +86,9 @@ test(external ? 'Five real clients complete a delivery on the Cloudflare adapter
     await Promise.all(clients.map(c => c.move(world.camp, 25)));
     await Promise.all(clients.map(c => c.command({ type: 'interact' }))); assert(clients.every(c => c.frame!.trip.docked));
     const bank = winner.frame!.profile.credits; assert(bank > 0); assert(clients.every(c => c.frame!.profile.credits === bank));
-    const exportResponse = await fetch(`${server}/worlds/${id}/export`, { headers: { Authorization: 'Bearer ' + keys[4] } });
+    const exportResponse = await fetch(`${server}/worlds/${id}/export`, { headers: { Authorization: 'Bearer ' + keys[4], ...accessHeaders } });
     assert(exportResponse.ok); const saved = await exportResponse.json() as WorldState; assert.equal(saved.campaign.delivered, 1); assert(saved.campaign.regions[0].taken.includes(0));
-    assert.equal((await fetch(`${server}/worlds/${id}/export`, { headers: { Authorization: 'Bearer ' + invite } })).status, 403);
+    assert.equal((await fetch(`${server}/worlds/${id}/export`, { headers: { Authorization: 'Bearer ' + invite, ...accessHeaders } })).status, 403);
     if (external) {
       await mkdir('test-results', {recursive:true});
       await writeFile('test-results/cloud-world.json',JSON.stringify(saved));
@@ -98,7 +112,7 @@ test(external ? 'Five real clients complete a delivery on the Cloudflare adapter
     const imported = spawn(globalThis.process.execPath, ['--import', 'tsx', 'server/node.ts', '--import', exportPath], { env: { ...env, GLUSH_DATA_DIR: importedDir }, windowsHide: true });
     const [exitCode] = await once(imported, 'exit'); assert.equal(exitCode, 0);
     await start(importedDir); const moved = new Driver(server, id, keys[4]); clients.push(moved); await until(() => !!moved.frame); assert.equal(moved.frame!.profile.credits, bank);
-    const roundTrip = await (await fetch(`${server}/worlds/${id}/export`, { headers: { Authorization: 'Bearer ' + keys[4] } })).json() as WorldState;
+    const roundTrip = await (await fetch(`${server}/worlds/${id}/export`, { headers: { Authorization: 'Bearer ' + keys[4], ...accessHeaders } })).json() as WorldState;
     assert.deepEqual(roundTrip.campaign.regions, saved.campaign.regions); assert.equal(roundTrip.players.length, 5);
   } catch (error) { console.error(output.slice(-4000)); throw error; }
   finally {

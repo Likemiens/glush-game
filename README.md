@@ -10,7 +10,7 @@ The transmitters have gone quiet. Roads disappear after sunset. Your station has
 
 ### [▶ PLAY FREE IN YOUR BROWSER](https://glush.varantsov.ru/)
 
-Single player or online co-op for **up to 5 players** · Desktop and touch controls · English and Russian
+Free single player · Desktop and touch controls · English and Russian
 
 English is the default. Choose your language on the title screen or in **Settings → Language**. It is saved in this browser independently of your campaign; friends in the same world can use different languages.
 
@@ -36,7 +36,9 @@ Two warm headlights cut through the fog and stop at walls. Turn them off, slow t
 
 *Actual gameplay: a night drive through the procedural outskirts.*
 
-## Bring your friends home
+## Co-op: private playtest
+
+The public game is single player. Online co-op is reserved for invited friends in a separate, access-controlled playtest; it is not available from the public game's menus. The source still includes co-op for self-hosting.
 
 Create a world, choose a callsign and share its invitation. Up to five drivers have their own cars, trunks and upgrades, with shared discoveries, radio stories and expedition rewards. Connect a second winch, pull a friend's car, pass cargo on the ground, or light their route.
 
@@ -44,7 +46,7 @@ The world stays available when its creator leaves. When everyone disconnects, it
 
 ![Five players help tow a stranded vehicle using two ropes](public/screenshots/coop-rescue.png)
 
-*Actual gameplay with five connected clients in a staged test expedition, including a second winch.*
+*Private playtest footage with five connected clients and a second winch. This mode requires a private invitation.*
 
 ## Make the world yours
 
@@ -96,9 +98,9 @@ On phones, use the left joystick and the right action buttons. Trunk, radio, lig
 
 Solo progress saves in this browser, with v3/v4 → v5 migration and a backup. Currency, purchases and known world state carry over. Lamp activations never recorded by an older version cannot be reconstructed.
 
-For co-op, choose **Играть с друзьями → Создать общий мир**, then copy the invitation. To return later, use **Продолжить общий мир** or the original link. Export your private player key from the crew menu before moving to another browser or device. Keep that key private; give friends the invitation instead. The crew menu also exports the shared world.
+Invited testers open their private playtest link, then choose **Play with friends → Create shared world** and copy the invitation. A new invitation includes playtest access for friends. To return later, use **Continue shared world**. Existing worlds and cars are preserved: after entering the private playtest, paste an old world invitation or resume the last room. Export your private player key from the crew menu before moving to another browser or device. The crew menu also exports the shared world.
 
-The public client runs on Vercel, with persistent rooms in Cloudflare Durable Objects using SQLite. The service uses platform free-tier limits; it does not automatically upgrade to a paid plan. New-world creation is limited to 5 per IP per day and 25 per day across the service. Existing worlds can still be resumed, subject to platform limits.
+The public client runs on Vercel and makes no multiplayer requests during solo play. Private test rooms use Cloudflare Durable Objects with SQLite. The server requires a test access key before room lookup, creation, WebSocket upgrade or export; old public invitations alone cannot connect. Unauthorized HTTP requests still count as lightweight Worker requests, but do not start room simulations. The service stays on the existing plan. New-world creation remains limited to 5 per IP per day and 25 per day across the service.
 
 For your own **Node.js + WebSocket + SQLite** server, Docker setup, Cloudflare deployment, and world migration, see [Self-hosting](docs/self-hosting.md).
 

@@ -8,7 +8,7 @@ import type { Command } from '../game/commands';
 import { makeKey, PROTOCOL } from './protocol';
 import type { ActorFrame, ClientMessage, ServerMessage } from './protocol';
 export type Identity = { server: string; key: string; name: string };
-export type RoomLink = { server: string; id: string; invite?: string };
+export type RoomLink = { server: string; id: string; invite?: string; access?: string };
 export function serverAddress(value: string): string {
   const url = new URL(value); if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname))) throw new Error('Нужен HTTPS-адрес сервера.');
   return url.origin;
@@ -23,18 +23,27 @@ export function saveIdentity(identity: Identity): void {
   localStorage.setItem('glush:identity:' + serverAddress(identity.server), JSON.stringify(identity));
 }
 export function invitation(link: RoomLink): string {
-  const url = new URL(location.origin + location.pathname); url.hash = new URLSearchParams({ room: link.id, server: link.server, ...(link.invite ? { invite: link.invite } : {}) }).toString(); return url.toString();
+  const url = new URL('/playtest/', location.origin); url.hash = new URLSearchParams({ room: link.id, server: link.server, ...(link.invite ? { invite: link.invite } : {}), ...(link.access ? { test: link.access } : {}) }).toString(); return url.toString();
 }
 export function parseInvitation(text: string): RoomLink {
   const url = new URL(text), params = new URLSearchParams(url.hash.slice(1)), id = params.get('room');
   if (!id || !/^[a-f0-9-]{36}$/.test(id)) throw new Error('В ссылке нет игрового мира.');
-  return { id, server: serverAddress(params.get('server') ?? ''), invite: params.get('invite') ?? undefined };
+  return { id, server: serverAddress(params.get('server') ?? ''), invite: params.get('invite') ?? undefined, access: params.get('test') ?? undefined };
 }
-export async function createRoom(server: string, identity: Identity): Promise<RoomLink> {
-  const response = await fetch(serverAddress(server) + '/worlds', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ key: identity.key, name: identity.name }) });
+function accessHeaders(access?: string): Record<string, string> { return access ? { 'X-Glush-Test-Key': access } : {}; }
+class AccessDeniedError extends Error {}
+export async function checkAccess(server: string, access?: string): Promise<void> {
+  const response = await fetch(serverAddress(server) + '/access', { headers: accessHeaders(access), signal: AbortSignal.timeout(10000) });
+  if (response.status === 401 || response.status === 403) throw new AccessDeniedError('Кооператив доступен только по закрытому приглашению на тест.');
+  if (!response.ok) throw new Error('Не удалось проверить приглашение.');
+  const data = await response.json() as { ok?: boolean };
+  if (data.ok !== true) throw new Error('Не удалось проверить приглашение.');
+}
+export async function createRoom(server: string, identity: Identity, access?: string): Promise<RoomLink> {
+  const response = await fetch(serverAddress(server) + '/worlds', { method: 'POST', headers: { 'Content-Type': 'application/json', ...accessHeaders(access) }, body: JSON.stringify({ key: identity.key, name: identity.name }) });
   const data = await response.json() as { id: string; invite: string; error?: string };
   if (!response.ok) throw new Error(data.error ?? 'Сервер недоступен.');
-  return { server: serverAddress(server), id: data.id, invite: data.invite };
+  return { server: serverAddress(server), id: data.id, invite: data.invite, access };
 }
 export class CoopClient {
   state: 'connecting' | 'online' | 'reconnecting' | 'closed' = 'connecting';
@@ -63,8 +72,23 @@ export class CoopClient {
   get self(): Simulation | undefined { return this.simulations.get(this.playerId); }
   get peers(): Simulation[] { return [...this.simulations.entries()].filter(([id]) => id !== this.playerId).map(([, sim]) => sim); }
   connect(): void {
+    void this.openConnection();
+  }
+  private async openConnection(): Promise<void> {
+    try { await checkAccess(this.link.server, this.link.access); }
+    catch (error) {
+      if (this.stopped) return;
+      this.onError(error instanceof AccessDeniedError ? error.message : 'Нет связи с сервером. Проверяю подключение.');
+      if (error instanceof AccessDeniedError) this.state = 'closed';
+      else {
+        this.state = 'reconnecting'; this.history = [];
+        this.reconnect = setTimeout(() => this.connect(), this.retry); this.retry = Math.min(15000, this.retry * 1.6);
+      }
+      this.onChange(false); return;
+    }
+    if (this.stopped) return;
     const url = this.link.server.replace(/^http/, 'ws') + `/worlds/${this.link.id}/socket`;
-    const socket = this.socket = new WebSocket(url);
+    const socket = this.socket = new WebSocket(url, this.link.access ? ['glush', 'glush-test.' + this.link.access] : []);
     socket.onopen = () => this.send({ type: 'hello', version: PROTOCOL, key: this.identity.key, name: this.identity.name, invite: this.link.invite });
     socket.onmessage = event => {
       try { this.receive(JSON.parse(String(event.data)) as ServerMessage); }
@@ -157,7 +181,7 @@ export class CoopClient {
     }
   }
   async exportWorld(): Promise<unknown> {
-    const response = await fetch(`${this.link.server}/worlds/${this.link.id}/export`, { headers: { Authorization: `Bearer ${this.identity.key}` } });
+    const response = await fetch(`${this.link.server}/worlds/${this.link.id}/export`, { headers: { Authorization: `Bearer ${this.identity.key}`, ...accessHeaders(this.link.access) } });
     if (!response.ok) throw new Error('Не удалось экспортировать мир.'); return response.json();
   }
   close(): void { this.stopped = true; this.state = 'closed'; clearTimeout(this.reconnect); this.socket?.close(); }

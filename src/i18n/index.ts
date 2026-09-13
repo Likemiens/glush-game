@@ -14,6 +14,14 @@ export function rememberLanguage(storage: Pick<Storage, 'setItem'>, value: Langu
 }
 
 const extra: Readonly<Record<string, string>> = {
+  'Закрытый тест': 'Private playtest',
+  'Кооператив для приглашённых друзей. Открой личную ссылку или вставь её ниже.': 'Co-op for invited friends. Open your private link or paste it below.',
+  'Приглашение на тест': 'Playtest invitation',
+  'Открыть тест →': 'Enter playtest →',
+  'Одиночная игра →': 'Play solo →',
+  'Проверяю приглашение…': 'Checking your invitation…',
+  'Не удалось проверить приглашение.': 'Could not check your invitation. Try again.',
+  'Кооператив доступен только по закрытому приглашению на тест.': 'Co-op requires a private playtest invitation.',
   'Язык': 'Language',
   '{0} с': '{0} s',
   'команда собирается на выезд': 'the crew is preparing to leave',

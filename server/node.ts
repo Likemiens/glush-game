@@ -7,6 +7,11 @@ import { Room, worldStateSchema } from './room';
 import type { WorldState } from './room';
 import { RoomRuntime } from './runtime';
 import { createWorldSchema, hashKey, makeKey } from '../src/net/protocol';
+import { ACCESS_ERROR, hasTestAccess } from './access';
+import type { IncomingHttpHeaders } from 'node:http';
+
+const accessHash = process.env.GLUSH_TEST_KEY_HASH;
+const headersFor = (source: IncomingHttpHeaders): Headers => new Headers(Object.entries(source).flatMap(([key, value]) => value === undefined ? [] : [[key, Array.isArray(value) ? value.join(',') : value]]));
 
 const directory = resolve(process.env.GLUSH_DATA_DIR ?? '.data'); mkdirSync(directory, { recursive: true });
 const db = new DatabaseSync(resolve(directory, 'worlds.sqlite'));
@@ -35,13 +40,15 @@ const server = createServer(async (req, res) => {
   const origin = req.headers.origin;
   if (!allowed(origin)) { res.writeHead(403); res.end(); return; }
   if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Vary', 'Origin'); res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization'); res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Vary', 'Origin'); res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Glush-Test-Key'); res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
   const json = (data: unknown, status = 200): void => { res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); };
   try {
     const url = new URL(req.url ?? '/', 'http://localhost');
     if (url.pathname === '/health') { json({ ok: true, protocol: 1 }); return; }
     if (url.pathname === '/multiplayer.json') { json({ server: process.env.PUBLIC_SERVER_URL || `${req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http'}://${req.headers.host}` }); return; }
+    if ((url.pathname === '/access' || url.pathname.startsWith('/worlds')) && !await hasTestAccess(headersFor(req.headers), accessHash, false)) { json({ error: ACCESS_ERROR }, 401); return; }
+    if (url.pathname === '/access' && req.method === 'GET') { json({ ok: true }); return; }
     if (url.pathname === '/worlds' && req.method === 'POST') {
       let body = ''; for await (const chunk of req) { body += chunk; if (body.length > 4096) { json({ error: 'Request too large' }, 413); return; } }
       const data = createWorldSchema.parse(JSON.parse(body));
@@ -65,16 +72,18 @@ const server = createServer(async (req, res) => {
     if (req.method === 'GET' && existsSync(clientRoot)) {
       let file = resolve(clientRoot, '.' + decodeURIComponent(url.pathname));
       if (!file.startsWith(clientRoot + sep) && file !== clientRoot) { json({ error: 'Invalid path' }, 400); return; }
-      if (file === clientRoot || !existsSync(file) || !statSync(file).isFile()) file = resolve(clientRoot, 'index.html');
+      if (existsSync(file) && statSync(file).isDirectory()) file = resolve(file, 'index.html');
+      if (!existsSync(file) || !statSync(file).isFile()) file = resolve(clientRoot, 'index.html');
       res.writeHead(200, { 'Content-Type': mime[extname(file)] ?? 'application/octet-stream' }); res.end(readFileSync(file)); return;
     }
     json({ error: 'Not found' }, 404);
   } catch (error) { json({ error: error instanceof Error && !('issues' in error) ? error.message : 'Неверный запрос.' }, 400); }
 });
-const wss = new WebSocketServer({ noServer: true, maxPayload: 16384 });
-server.on('upgrade', (req, socket, head) => {
+const wss = new WebSocketServer({ noServer: true, maxPayload: 16384, handleProtocols: protocols => protocols.has('glush') ? 'glush' : false });
+server.on('upgrade', async (req, socket, head) => {
   const match = (req.url ?? '').match(/^\/worlds\/([a-f0-9-]{36})\/socket$/);
   if (!match || !allowed(req.headers.origin)) { socket.destroy(); return; }
+  if (!await hasTestAccess(headersFor(req.headers), accessHash, false)) { socket.end('HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 0\r\n\r\n'); return; }
   const run = runtime(match[1]); if (!run) { socket.destroy(); return; }
   wss.handleUpgrade(req, socket, head, ws => {
     const peer = { send: (text: string) => { if (ws.bufferedAmount > 2e6) ws.close(1013, 'Slow connection'); else ws.send(text); }, close: (code: number, reason: string) => ws.close(code, reason) };

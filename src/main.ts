@@ -16,6 +16,7 @@ import type { Command } from './game/commands';
 import { cells as shapeCells } from './game/inventory';
 import { CoopClient, createRoom, identityFor, invitation, parseInvitation, saveIdentity } from './net/client';
 import type { Identity, RoomLink } from './net/client';
+import { playtestAccess } from './net/playtest';
 
 try { setLanguage(readLanguage(localStorage)); } catch { setLanguage('en'); }
 
@@ -49,11 +50,15 @@ let playing = false, paused = true, panelType = '', lastTime = performance.now()
 let toastTimer: ReturnType<typeof setTimeout> | undefined, saveWarning = false;
 let selectedCargo = -1;
 let coop: CoopClient | null = null;
-let coopServer = ['localhost', '127.0.0.1'].includes(location.hostname) ? 'http://127.0.0.1:8787' : '';
-let coopName = '', coopInvite = location.hash.includes('room=') ? location.href : '', networkTarget: { x: number; y: number } | undefined;
-void fetch('./multiplayer.json').then(r => r.json()).then((config: { server?: string }) => { if (config.server) coopServer = config.server; }).catch(() => {});
+const testAccess = playtestAccess(), coopEnabled = !!testAccess;
+if (coopEnabled) $('.welcome-mark').textContent = 'GLUSH · PLAYTEST';
+let coopServer = testAccess?.server ?? '';
+let coopName = '', coopInvite = coopEnabled && location.hash.includes('room=') ? location.href : '', networkTarget: { x: number; y: number } | undefined;
+const accessFor = (server: string): string | undefined => server === testAccess?.server ? testAccess.key : undefined;
 function download(name: string, value: unknown): void { const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' })); const a = document.createElement('a'); a.href = url; a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function connectCoop(link: RoomLink): void {
+  if (!coopEnabled) return;
+  link = { ...link, access: accessFor(link.server) ?? link.access };
   persist(); coop?.close(); const identity = identityFor(link.server); identity.name = coopName.trim() || identity.name; coopName = identity.name; saveIdentity(identity);
   coop = new CoopClient(link, identity); coop.onError = message => toast(message, 7000);
   coop.onChange = refresh => {
@@ -96,6 +101,7 @@ function cargoMarkup(): string {
   return sim.cargo.length ? `<div class="cargo-list">${sim.cargo.map(item => `<div><span style="color:${CARGO[item.kind].color}">${CARGO[item.kind].name}</span><small>${item.kind === 'volatile' ? `${Math.ceil(item.ttl)} сек` : item.kind === 'fragile' ? `${Math.round(item.condition)}%` : `${CARGO[item.kind].slots} мест`} · ${sim.itemValue(item)} дет.</small></div>`).join('')}</div>` : '<p class="base-note">Багажник пуст. Ищи находки сканером.</p>';
 }
 function openPanel(type: string): void {
+  if (type === 'coop' && !coopEnabled) return;
   if (type === 'inventory' && sim.car.speed > 2) { toast('Останови машину, чтобы открыть багажник'); return; }
   const previousType = panelType, scroll = panel.scrollTop;
   paused = true; input.enabled = false; input.clear(); sound.setPaused(!coop && type !== 'base'); panelType = type; persist();
@@ -103,7 +109,7 @@ function openPanel(type: string): void {
   panel.classList.toggle('base-panel', type === 'base'); panel.classList.toggle('map-panel', type === 'map');
   const content = $('#panel-content'); content.onkeydown = null;
   if (type === 'base') {
-    content.innerHTML = stationMarkup(sim, baseView, selectedRegion, !!coop);
+    content.innerHTML = stationMarkup(sim, baseView, selectedRegion, !!coop, coopEnabled);
     $('#base-settings').onclick = () => openPanel('settings');
     document.querySelectorAll<HTMLButtonElement>('[data-view]').forEach(button => { button.onclick = () => { baseView = button.dataset.view as BaseView; sound.play('ui'); openPanel('base'); panel.scrollTop = 0; document.querySelector<HTMLButtonElement>(`[data-view="${baseView}"]`)?.focus({ preventScroll: true }); }; });
     document.querySelectorAll<HTMLButtonElement>('[data-region]').forEach(button => { button.onclick = () => { selectedRegion = Number(button.dataset.region); sound.play('ui'); openPanel('base'); }; });
@@ -128,7 +134,7 @@ function openPanel(type: string): void {
       $<HTMLInputElement>('#coop-name').oninput = e => { coopName = (e.target as HTMLInputElement).value; };
       $<HTMLInputElement>('#coop-invite').oninput = e => { coopInvite = (e.target as HTMLInputElement).value; };
       $<HTMLInputElement>('#coop-server').oninput = e => { coopServer = (e.target as HTMLInputElement).value; $<HTMLButtonElement>('#create-room').disabled = !coopServer; };
-      $('#create-room').onclick = async () => { try { const identity = identityFor(coopServer); identity.name = coopName.trim() || identity.name; saveIdentity(identity); $<HTMLButtonElement>('#create-room').disabled = true; const link = await createRoom(coopServer, identity); connectCoop(link); } catch (e) { toast(e instanceof Error ? e.message : 'Не удалось создать мир.'); openPanel('coop'); } };
+      $('#create-room').onclick = async () => { try { const identity = identityFor(coopServer); identity.name = coopName.trim() || identity.name; saveIdentity(identity); $<HTMLButtonElement>('#create-room').disabled = true; const link = await createRoom(coopServer, identity, accessFor(coopServer)); connectCoop(link); } catch (e) { toast(e instanceof Error ? e.message : 'Не удалось создать мир.'); openPanel('coop'); } };
       $('#join-room').onclick = () => { try { connectCoop(parseInvitation(coopInvite)); } catch (e) { toast(e instanceof Error ? e.message : 'Проверь приглашение.'); } };
       content.querySelector<HTMLButtonElement>('#last-room')?.addEventListener('click', () => { try { connectCoop(JSON.parse(localStorage.getItem('glush:last-room')!)); } catch { toast('Сохранённое приглашение повреждено.'); } });
       $<HTMLInputElement>('#import-key').onchange = async e => { try { const file = (e.target as HTMLInputElement).files?.[0]; if (!file || file.size > 4096) return; const identity = JSON.parse(await file.text()) as Identity; saveIdentity(identity); coopName = identity.name; coopServer = identity.server; openPanel('coop'); toast('Ключ загружен. Открой приглашение своего мира.'); } catch { toast('Не удалось прочитать личный ключ.'); } };
@@ -190,7 +196,7 @@ function openPanel(type: string): void {
     $('#resume').onclick = closePanel; $('#show-map').onclick = () => openPanel('map'); $('#show-journal').onclick = () => openPanel('journal'); $('#show-settings').onclick = () => openPanel('settings'); $('#evacuate').onclick = () => openPanel('evacuate'); content.querySelector<HTMLButtonElement>('#show-coop')?.addEventListener('click', () => openPanel('coop'));
   }
   if (type !== 'inventory') content.onkeydown = null;
-  if (type === 'pause') { content.insertAdjacentHTML('beforeend', '<div class="pause-grid"><button id="pause-trunk">Багажник</button><button id="pause-coop">Друзья и радио</button></div>'); $('#pause-trunk').onclick = () => openPanel('inventory'); $('#pause-coop').onclick = () => openPanel('coop'); }
+  if (type === 'pause') { content.insertAdjacentHTML('beforeend', `<div class="pause-grid"><button id="pause-trunk">Багажник</button>${coopEnabled ? '<button id="pause-coop">Друзья и радио</button>' : ''}</div>`); $('#pause-trunk').onclick = () => openPanel('inventory'); content.querySelector('#pause-coop')?.addEventListener('click', () => openPanel('coop')); }
   panel.classList.toggle('inventory-panel', type === 'inventory');
   bindFeatureButtons(content, run); localize(panel);
   if (!panel.open) panel.showModal();
