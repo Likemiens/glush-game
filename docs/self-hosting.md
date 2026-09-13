@@ -45,6 +45,18 @@ npm run cloudflare:deploy
 
 The configuration does not enable paid products. Durable Objects with SQLite are available on the Workers Free plan, with account-wide request, duration and storage limits. Check the current [pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/) and [limits](https://developers.cloudflare.com/durable-objects/platform/limits/) for the account running your server. Connected rooms use a regular WebSocket simulation loop; they do not hibernate while players are connected. With everyone offline, the simulation stops immediately.
 
+## Custom domain
+
+The Vercel project `glush-game` has `glush.varantsov.ru` attached. Its DNS is managed at REG.RU. Add the following record without changing the root domain or nameservers:
+
+| Type | Name | Target |
+| --- | --- | --- |
+| CNAME | `glush` | `710b397f55f9b773.vercel-dns-017.com.` |
+
+Run `npx vercel domains verify glush.varantsov.ru --scope likemiens-projects` to check DNS and certificate readiness. Use the current project's recommended record if Vercel changes its target. Both the custom domain and `glush-game.vercel.app` are allowed by the multiplayer server; rooms remain on the existing Cloudflare Worker.
+
+Browser storage is separate on each domain. Existing solo progress remains at the old address. To resume the same multiplayer car on the new domain, export its personal key from the old site's crew menu and import it on the new site's **Сервер и перенос ключа** panel, then open the world invitation. The invitation can be pasted from the old address; the room's server and ID stay the same. Keep the old site available without a forced redirect.
+
 ## Move a shared world
 
 1. In the crew menu, download **Скачать мир**. Each player should also download their own **Скачать личный ключ** file.

@@ -27,7 +27,7 @@ function runtime(id: string): RoomRuntime | undefined {
   const row = get.get(id); if (!row) return;
   const run = new RoomRuntime(Room.restore(JSON.parse(String(row.state))), save); live.set(id, run); return run;
 }
-const origins = (process.env.ALLOWED_ORIGINS ?? 'https://glush-game.vercel.app,http://127.0.0.1:4175,http://localhost:4175,http://127.0.0.1:8787').split(',');
+const origins = (process.env.ALLOWED_ORIGINS ?? 'https://glush-game.vercel.app,https://glush.varantsov.ru,http://127.0.0.1:4175,http://localhost:4175,http://127.0.0.1:8787').split(',');
 const allowed = (origin?: string): boolean => !origin || origins.includes(origin);
 const clientRoot = resolve('dist');
 const mime: Record<string, string> = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.mp3': 'audio/mpeg', '.woff2': 'font/woff2', '.json': 'application/json' };

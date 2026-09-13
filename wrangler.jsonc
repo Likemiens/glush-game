@@ -9,6 +9,6 @@
     { "name": "GATE", "class_name": "CreateGate" }
   ] },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WorldRoom", "CreateGate"] }],
-  "vars": { "ALLOWED_ORIGINS": "https://glush-game.vercel.app,http://127.0.0.1:4175,http://localhost:4175" },
+  "vars": { "ALLOWED_ORIGINS": "https://glush-game.vercel.app,https://glush.varantsov.ru,http://127.0.0.1:4175,http://localhost:4175" },
   "observability": { "enabled": true, "head_sampling_rate": 0.1 }
 }
