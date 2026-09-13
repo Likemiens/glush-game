@@ -14,6 +14,7 @@ export function rememberLanguage(storage: Pick<Storage, 'setItem'>, value: Langu
 }
 
 const extra: Readonly<Record<string, string>> = {
+  'Игра Александра Варанцова': 'A game by Alexandr Varantsov',
   'Закрытый тест': 'Private playtest',
   'Кооператив для приглашённых друзей. Открой личную ссылку или вставь её ниже.': 'Co-op for invited friends. Open your private link or paste it below.',
   'Приглашение на тест': 'Playtest invitation',
